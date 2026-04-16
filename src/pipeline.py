@@ -74,19 +74,20 @@ def parse_args():
         help="Search against all known databases",
     )
     parser.add_argument(
-        "--legacy",
+        "--two-pass",
         action="store_true",
         default=False,
-        help="Single-pass search with bias filter disabled on all sequences "
-             "against all models. Replicates TEsorter's --nobias behavior "
-             "with better performance. No two-pass filtering.",
+        help="Use two-pass search: fast coarse screen with bias filter, "
+             "then sensitive search on plausible pairs only. Faster on "
+             "genomic input where most sequence is non-TE. Default mode "
+             "is single-pass nobias (equivalent to TEsorter).",
     )
     parser.add_argument(
         "--pass-1-only",
         action="store_true",
         default=False,
         help="Run only the coarse pass-1 screen and store results. "
-             "Inspect the database before running pass 2.",
+             "Implies --two-pass. Inspect the database before running pass 2.",
     )
     parser.add_argument(
         "-o", "--outdir",
@@ -302,7 +303,9 @@ def main():
 
         log.info(f"--- Searching {name} ({os.path.basename(path)}) ---")
 
-        if args.legacy:
+        two_pass = args.two_pass or args.pass_1_only or args.emit_bath
+
+        if not two_pass:
             run_database_legacy(path, seq_block, name, conn)
         else:
             skip_pass2 = args.pass_1_only or args.emit_bath
@@ -319,44 +322,46 @@ def main():
                 emit_partitions(conn, seq_fasta, path, bath_dir,
                                 n_workers=args.processors, db_name=name)
 
-    # Export flat files
-    log.info("Exporting results")
-
-    # Determine which table to export from
-    if args.legacy:
-        hit_table = "legacy_hits"
-    else:
-        hit_table = "pass2_hits"
-
-    def outpath(filename):
-        return os.path.join(outdir, filename)
-
-    if not args.legacy:
-        p1_tsv = outpath(f"{prefix}.pass1.tsv")
-        export_tsv(conn, p1_tsv, table="pass1_hits")
-        log.info(f"  Raw pass-1 hits: {p1_tsv}")
-
-    if not args.pass_1_only:
-        raw_tsv = outpath(f"{prefix}.{'legacy' if args.legacy else 'pass2'}.tsv")
-        export_tsv(conn, raw_tsv, table=hit_table)
-        log.info(f"  Raw hits: {raw_tsv}")
-
-        best_tsv = outpath(f"{prefix}.best.tsv")
-        export_best_hits_tsv(conn, best_tsv, nucl_lengths=nucl_lengths,
-                             table=hit_table)
-        log.info(f"  Best hits: {best_tsv}")
-
-        domains_tsv = outpath(f"{prefix}.domains.tsv")
-        export_all_domains_tsv(conn, domains_tsv, nucl_lengths=nucl_lengths,
-                               table=hit_table)
-        log.info(f"  All domains: {domains_tsv}")
-
-        if any_amino:
-            dom_faa = outpath(f"{prefix}.domains.faa")
-            export_domain_sequences(conn, dom_faa, aa_fasta,
-                                    nucl_lengths=nucl_lengths,
-                                    table=hit_table)
-            log.info(f"  Domain sequences: {dom_faa}")
+    # TODO: rewrite exports with numpy for large datasets
+    # Flat file exports temporarily disabled -- results are in the SQLite db
+    # # Export flat files
+    # log.info("Exporting results")
+    #
+    # # Determine which table to export from
+    # if not two_pass:
+    #     hit_table = "legacy_hits"
+    # else:
+    #     hit_table = "pass2_hits"
+    #
+    # def outpath(filename):
+    #     return os.path.join(outdir, filename)
+    #
+    # if two_pass:
+    #     p1_tsv = outpath(f"{prefix}.pass1.tsv")
+    #     export_tsv(conn, p1_tsv, table="pass1_hits")
+    #     log.info(f"  Raw pass-1 hits: {p1_tsv}")
+    #
+    # if not args.pass_1_only:
+    #     raw_tsv = outpath(f"{prefix}.{'pass2' if two_pass else 'legacy'}.tsv")
+    #     export_tsv(conn, raw_tsv, table=hit_table)
+    #     log.info(f"  Raw hits: {raw_tsv}")
+    #
+    #     best_tsv = outpath(f"{prefix}.best.tsv")
+    #     export_best_hits_tsv(conn, best_tsv, nucl_lengths=nucl_lengths,
+    #                          table=hit_table)
+    #     log.info(f"  Best hits: {best_tsv}")
+    #
+    #     domains_tsv = outpath(f"{prefix}.domains.tsv")
+    #     export_all_domains_tsv(conn, domains_tsv, nucl_lengths=nucl_lengths,
+    #                            table=hit_table)
+    #     log.info(f"  All domains: {domains_tsv}")
+    #
+    #     if any_amino:
+    #         dom_faa = outpath(f"{prefix}.domains.faa")
+    #         export_domain_sequences(conn, dom_faa, aa_fasta,
+    #                                 nucl_lengths=nucl_lengths,
+    #                                 table=hit_table)
+    #         log.info(f"  Domain sequences: {dom_faa}")
 
     t_end = time.time()
     log.info(f"Done in {t_end - t_start:.1f}s")
