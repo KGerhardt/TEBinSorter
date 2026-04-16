@@ -29,6 +29,8 @@ Rice TE library (2,431 sequences), 4 processors.
 | REXdb (v4 + metazoa) | 266 | >2h | 39.9s | >180x |
 | GyDB | 314 | >2h | 44.5s | >162x |
 
+Some of these benchmarks are dominated by the model-loading and sequence routing costs associated with the very small test library of TE sequences used; at larger scales, routing costs amortize and performance gains from a reduced search space become much more obvious. This is most visible in the SINE data for this dataset, as this model contains vastly more expensive individual HMM search operations that dominate runtime in spite of the small target set. The reduction of query sequences produces the ~10x better performance relative to the legacy mode. Similar gains are expected for larger datasets on other sequences.
+
 ### Legacy mode (`--legacy`, exact TEsorter replication)
 
 | Database | Models | TEsorter | TEBinSorter | Speedup |
