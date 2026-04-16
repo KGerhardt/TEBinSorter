@@ -114,6 +114,28 @@ def _collect_hits(top_hits_iter):
     return all_hits
 
 
+def legacy_search(hmms, seq_block):
+    """
+    Legacy mode: single-pass search with bias filter OFF on all sequences
+    against all models. Equivalent to TEsorter's --nobias behavior, just
+    faster (hmmsearch instead of hmmscan, pyhmmer instead of subprocess).
+
+    Z is set to len(hmms) so E-values match hmmscan convention.
+    """
+    Z = len(hmms)
+
+    results_iter = pyhmmer.hmmsearch(
+        hmms, seq_block,
+        bias_filter=False,
+        Z=Z,
+        domZ=Z,
+        E=1e10,
+        domE=1e10,
+    )
+
+    return _collect_hits(results_iter)
+
+
 def pass1_screen(hmms, seq_block, F1=0.02, F2=1e-3, F3=1e-5):
     """
     Pass 1: coarse screen to identify plausible sequence-model pairs.

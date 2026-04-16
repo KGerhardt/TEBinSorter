@@ -11,11 +11,12 @@ import os
 import time
 
 from hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
-from search import build_sequence_block, pass1_screen, pass2_search, pass2_search_parallel
+from search import (build_sequence_block, pass1_screen, pass2_search,
+                    pass2_search_parallel, legacy_search)
 from sequence import translate_fasta, open_input
 from results import (create_db, store_sequences, store_pass1, store_pass2,
-                     export_tsv, export_best_hits_tsv, export_all_domains_tsv,
-                     export_domain_sequences)
+                     store_legacy, export_tsv, export_best_hits_tsv,
+                     export_all_domains_tsv, export_domain_sequences)
 from emit import emit_partitions
 
 logging.basicConfig(
@@ -73,6 +74,14 @@ def parse_args():
         help="Search against all known databases",
     )
     parser.add_argument(
+        "--legacy",
+        action="store_true",
+        default=False,
+        help="Single-pass search with bias filter disabled on all sequences "
+             "against all models. Replicates TEsorter's --nobias behavior "
+             "with better performance. No two-pass filtering.",
+    )
+    parser.add_argument(
         "--pass-1-only",
         action="store_true",
         default=False,
@@ -116,6 +125,26 @@ def parse_args():
              "exact result reproduction against old TEsorter output.",
     )
     return parser.parse_args()
+
+
+def run_database_legacy(db_path, seq_block, db_name, conn):
+    """
+    Legacy mode: single-pass nobias search, all sequences against all models.
+    """
+    log.info(f"Loading HMMs from {db_name}")
+    t0 = time.time()
+    hmms = load_hmms(db_path)
+    t1 = time.time()
+    log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
+
+    log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
+    t2 = time.time()
+    hits = legacy_search(hmms, seq_block)
+    t3 = time.time()
+    log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
+
+    store_legacy(conn, hits, db_name)
+    return len(hits)
 
 
 def run_database(db_path, seq_block, seq_fasta, db_name, alphabet, conn,
@@ -262,51 +291,58 @@ def main():
             seq_fasta = args.sequence
 
         log.info(f"--- Searching {name} ({os.path.basename(path)}) ---")
-        skip_pass2 = args.pass_1_only or args.emit_bath
-        p1, p2 = run_database(
-            path, seq_block, seq_fasta, name, alphabet, conn,
-            pass1_only=skip_pass2,
-            n_workers=args.processors,
-            F1=args.F1,
-        )
 
-        if args.emit_bath:
-            bath_dir = f"{prefix}.BATHwater"
-            log.info(f"  Emitting BATH partitions to {bath_dir}/")
-            emit_partitions(conn, seq_fasta, path, bath_dir,
-                            n_workers=args.processors, db_name=name)
+        if args.legacy:
+            run_database_legacy(path, seq_block, name, conn)
+        else:
+            skip_pass2 = args.pass_1_only or args.emit_bath
+            p1, p2 = run_database(
+                path, seq_block, seq_fasta, name, alphabet, conn,
+                pass1_only=skip_pass2,
+                n_workers=args.processors,
+                F1=args.F1,
+            )
+
+            if args.emit_bath:
+                bath_dir = f"{prefix}.BATHwater"
+                log.info(f"  Emitting BATH partitions to {bath_dir}/")
+                emit_partitions(conn, seq_fasta, path, bath_dir,
+                                n_workers=args.processors, db_name=name)
 
     # Export flat files
     log.info("Exporting results")
 
-    # Raw domain table dumps
-    p1_tsv = f"{prefix}.pass1.tsv"
-    export_tsv(conn, p1_tsv, table="pass1_hits")
-    log.info(f"  Raw pass-1 hits: {p1_tsv}")
+    # Determine which table to export from
+    if args.legacy:
+        hit_table = "legacy_hits"
+    else:
+        hit_table = "pass2_hits"
+
+    if not args.legacy:
+        p1_tsv = f"{prefix}.pass1.tsv"
+        export_tsv(conn, p1_tsv, table="pass1_hits")
+        log.info(f"  Raw pass-1 hits: {p1_tsv}")
 
     if not args.pass_1_only:
-        p2_tsv = f"{prefix}.pass2.tsv"
-        export_tsv(conn, p2_tsv, table="pass2_hits")
-        log.info(f"  Raw pass-2 hits: {p2_tsv}")
+        raw_tsv = f"{prefix}.{'legacy' if args.legacy else 'pass2'}.tsv"
+        export_tsv(conn, raw_tsv, table=hit_table)
+        log.info(f"  Raw hits: {raw_tsv}")
 
-        # Best hits with nucleotide coordinates
         best_tsv = f"{prefix}.best.tsv"
         export_best_hits_tsv(conn, best_tsv, nucl_lengths=nucl_lengths,
-                             table="pass2_hits")
+                             table=hit_table)
         log.info(f"  Best hits: {best_tsv}")
 
-        # All domains with coordinates
         domains_tsv = f"{prefix}.domains.tsv"
         export_all_domains_tsv(conn, domains_tsv, nucl_lengths=nucl_lengths,
-                               table="pass2_hits")
+                               table=hit_table)
         log.info(f"  All domains: {domains_tsv}")
 
-        # Domain protein sequences
         if any_amino:
             dom_faa = f"{prefix}.domains.faa"
             export_domain_sequences(conn, dom_faa, aa_fasta,
                                     nucl_lengths=nucl_lengths,
-                                    table="pass2_hits")
+                                    table=hit_table)
             log.info(f"  Domain sequences: {dom_faa}")
 
     t_end = time.time()

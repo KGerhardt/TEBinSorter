@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS pass2_hits (
     {_HIT_COLUMNS}
 );
 
+CREATE TABLE IF NOT EXISTS legacy_hits (
+    {_HIT_COLUMNS}
+);
+
 CREATE INDEX IF NOT EXISTS idx_p1_target ON pass1_hits(target_name);
 CREATE INDEX IF NOT EXISTS idx_p1_query ON pass1_hits(query_name);
 CREATE INDEX IF NOT EXISTS idx_p1_db ON pass1_hits(database);
@@ -56,6 +60,10 @@ CREATE INDEX IF NOT EXISTS idx_p2_target ON pass2_hits(target_name);
 CREATE INDEX IF NOT EXISTS idx_p2_query ON pass2_hits(query_name);
 CREATE INDEX IF NOT EXISTS idx_p2_evalue ON pass2_hits(i_evalue);
 CREATE INDEX IF NOT EXISTS idx_p2_db ON pass2_hits(database);
+CREATE INDEX IF NOT EXISTS idx_leg_target ON legacy_hits(target_name);
+CREATE INDEX IF NOT EXISTS idx_leg_query ON legacy_hits(query_name);
+CREATE INDEX IF NOT EXISTS idx_leg_evalue ON legacy_hits(i_evalue);
+CREATE INDEX IF NOT EXISTS idx_leg_db ON legacy_hits(database);
 """
 
 _INSERT_COLS = (
@@ -142,6 +150,16 @@ def store_pass2(conn, hits, db_name):
     conn.commit()
 
 
+def store_legacy(conn, hits, db_name):
+    """Store legacy single-pass search hits."""
+    rows = _hits_to_rows(hits, db_name)
+    conn.executemany(
+        f"INSERT INTO legacy_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
+        rows,
+    )
+    conn.commit()
+
+
 def export_tsv(conn, tsv_path, table="pass2_hits", db_name=None):
     """
     Export raw domain hits to a tab-separated file.
@@ -152,7 +170,7 @@ def export_tsv(conn, tsv_path, table="pass2_hits", db_name=None):
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     columns = [
         "database", "target_name", "target_len", "query_name", "query_len",
@@ -194,7 +212,7 @@ def export_best_hits_tsv(conn, tsv_path, nucl_lengths=None,
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     db_filter = ""
     params = ()
@@ -275,7 +293,7 @@ def export_all_domains_tsv(conn, tsv_path, nucl_lengths=None,
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     query = f"""
         SELECT database, target_name, target_len,
@@ -353,7 +371,7 @@ def export_domain_sequences(conn, fasta_path, aa_fasta, nucl_lengths=None,
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     seqs = load_sequences_dict(aa_fasta)
 
@@ -418,7 +436,7 @@ def query_best_hits(conn, table="pass2_hits", db_name=None):
     Returns:
         list of sqlite3.Row objects
     """
-    assert table in ("pass1_hits", "pass2_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
     conn.row_factory = sqlite3.Row
 
     where = ""
