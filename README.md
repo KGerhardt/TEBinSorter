@@ -23,11 +23,11 @@ Rice TE library (2,431 sequences), 4 processors.
 
 | Database | Models | TEsorter | TEBinSorter | Speedup |
 |----------|--------|----------|-------------|---------|
-| TIR (Yuan & Wessler) | 17 | 26m 41s | 2.4s | ~668x |
-| LINE (Kapitonov) | 28 | 56m 45s | 5.0s | ~681x |
-| SINE (AnnoSINE) | 88 | ~30m | 10.5s | ~171x |
-| REXdb (v4 + metazoa) | 266 | >2h | 49.5s | >150x |
-| GyDB | 314 | >2h | 59.0s | >120x |
+| TIR (Yuan & Wessler) | 17 | 26m 41s | 2.1s | ~762x |
+| LINE (Kapitonov) | 28 | 56m 45s | 4.9s | ~695x |
+| SINE (AnnoSINE) | 88 | ~30m | 4.3s | ~419x |
+| REXdb (v4 + metazoa) | 266 | >2h | 39.9s | >180x |
+| GyDB | 314 | >2h | 44.5s | >162x |
 
 ### Legacy mode (`--legacy`, exact TEsorter replication)
 
