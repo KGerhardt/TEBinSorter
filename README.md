@@ -15,7 +15,11 @@ Results are stored in a SQLite database with separate tables for each pass, enab
 
 ## Benchmarks
 
-Rice TE library (2,431 sequences), 4 processors:
+Rice TE library (2,431 sequences), 4 processors.
+
+**Important caveat:** TEsorter baseline times were measured on WSL2 (Windows Subsystem for Linux), which has known I/O and process-spawning overhead compared to native Linux. TEsorter's architecture (many subprocess calls to hmmscan, heavy temp file I/O) is disproportionately affected by this. The true speedup on native Linux may be smaller. TEBinSorter times are also WSL2 but its architecture (in-process pyhmmer, minimal disk I/O) is less sensitive to this penalty.
+
+### Two-pass mode (default)
 
 | Database | Models | TEsorter | TEBinSorter | Speedup |
 |----------|--------|----------|-------------|---------|
@@ -24,6 +28,20 @@ Rice TE library (2,431 sequences), 4 processors:
 | SINE (AnnoSINE) | 88 | ~30m | 10.5s | ~171x |
 | REXdb (v4 + metazoa) | 266 | >2h | 49.5s | >150x |
 | GyDB | 314 | >2h | 59.0s | >120x |
+
+### Legacy mode (`--legacy`, exact TEsorter replication)
+
+| Database | Models | TEsorter | TEBinSorter | Speedup |
+|----------|--------|----------|-------------|---------|
+| TIR | 17 | 26m 41s | 0.9s | ~1,779x |
+| LINE | 28 | 56m 45s | 1.7s | ~2,003x |
+| SINE | 88 | ~30m | 38.1s | ~47x |
+| REXdb | 266 | >2h | 20.2s | >356x |
+| GyDB | 314 | >2h | 18.3s | >393x |
+
+All 5 databases searched in **79 seconds** total (legacy mode, 4 processors).
+
+By adopting the original no-filter algorithm, `--legacy` mode ensures identical results to the original TEsorter. However, TEBinSorter contains other algorithmic and parallel workload balancing improvements that nonetheless substantially improve overall performance.
 
 ### Verification against TEsorter
 

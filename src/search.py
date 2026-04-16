@@ -16,6 +16,7 @@ the standard HMMER domain table text format.
 import io
 import logging
 import multiprocessing
+import statistics
 from collections import defaultdict
 
 import pyfastx
@@ -114,26 +115,74 @@ def _collect_hits(top_hits_iter):
     return all_hits
 
 
+def _partition_hmms_by_size(hmms):
+    """
+    Partition HMMs into normal and outlier groups by M^2 cost.
+
+    Uses the standard IQR outlier definition: any model with
+    M^2 > Q3 + 1.5 * IQR is an outlier. Outliers benefit from
+    parallel='targets' (parallelize over sequences), while normal
+    models are faster with parallel='queries' (parallelize over models).
+
+    Returns:
+        (normal_hmms, outlier_hmms) -- two lists
+    """
+    if len(hmms) < 4:
+        return hmms, []
+
+    m2_values = sorted(h.M ** 2 for h in hmms)
+    q1 = statistics.median(m2_values[:len(m2_values) // 2])
+    q3 = statistics.median(m2_values[(len(m2_values) + 1) // 2:])
+    iqr = q3 - q1
+    threshold = q3 + 1.5 * iqr
+
+    normal = [h for h in hmms if h.M ** 2 <= threshold]
+    outliers = [h for h in hmms if h.M ** 2 > threshold]
+
+    return normal, outliers
+
+
 def legacy_search(hmms, seq_block):
     """
     Legacy mode: single-pass search with bias filter OFF on all sequences
     against all models. Equivalent to TEsorter's --nobias behavior, just
     faster (hmmsearch instead of hmmscan, pyhmmer instead of subprocess).
 
+    Models are partitioned by M^2 cost: normal models use parallel='queries'
+    (faster when models are similarly sized), outliers use parallel='targets'
+    (avoids one huge model monopolizing a thread).
+
     Z is set to len(hmms) so E-values match hmmscan convention.
     """
     Z = len(hmms)
+    normal, outliers = _partition_hmms_by_size(hmms)
 
-    results_iter = pyhmmer.hmmsearch(
-        hmms, seq_block,
-        bias_filter=False,
-        Z=Z,
-        domZ=Z,
-        E=1e10,
-        domE=1e10,
-    )
+    all_hits = []
 
-    return _collect_hits(results_iter)
+    if normal:
+        log.info(f"    {len(normal)} normal models (parallel=queries)")
+        results_iter = pyhmmer.hmmsearch(
+            normal, seq_block,
+            bias_filter=False,
+            Z=Z, domZ=Z, E=1e10, domE=1e10,
+            parallel="queries",
+        )
+        all_hits.extend(_collect_hits(results_iter))
+
+    if outliers:
+        names = [h.name for h in outliers]
+        log.info(f"    {len(outliers)} outlier models (parallel=targets): "
+                 f"{', '.join(n[:40] for n in names[:3])}"
+                 f"{'...' if len(names) > 3 else ''}")
+        results_iter = pyhmmer.hmmsearch(
+            outliers, seq_block,
+            bias_filter=False,
+            Z=Z, domZ=Z, E=1e10, domE=1e10,
+            parallel="targets",
+        )
+        all_hits.extend(_collect_hits(results_iter))
+
+    return all_hits
 
 
 def pass1_screen(hmms, seq_block, F1=0.02, F2=1e-3, F3=1e-5):
@@ -151,19 +200,25 @@ def pass1_screen(hmms, seq_block, F1=0.02, F2=1e-3, F3=1e-5):
     """
     Z = len(hmms)
 
-    results_iter = pyhmmer.hmmsearch(
-        hmms, seq_block,
-        bias_filter=True,
-        F1=F1,
-        F2=F2,
-        F3=F3,
-        Z=Z,
-        domZ=Z,
-        E=1e10,
-        domE=1e10,
-    )
+    normal, outliers = _partition_hmms_by_size(hmms)
 
-    all_hits = _collect_hits(results_iter)
+    all_hits = []
+
+    if normal:
+        all_hits.extend(_collect_hits(pyhmmer.hmmsearch(
+            normal, seq_block,
+            bias_filter=True, F1=F1, F2=F2, F3=F3,
+            Z=Z, domZ=Z, E=1e10, domE=1e10,
+            parallel="queries",
+        )))
+
+    if outliers:
+        all_hits.extend(_collect_hits(pyhmmer.hmmsearch(
+            outliers, seq_block,
+            bias_filter=True, F1=F1, F2=F2, F3=F3,
+            Z=Z, domZ=Z, E=1e10, domE=1e10,
+            parallel="targets",
+        )))
 
     seq_models = defaultdict(set)
     for hit in all_hits:
