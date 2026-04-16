@@ -89,9 +89,14 @@ def parse_args():
              "Inspect the database before running pass 2.",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o", "--outdir",
         default=None,
-        help="Output prefix [default: {input}.ksort]",
+        help="Output directory [default: {input}.TEBinSorter]",
+    )
+    parser.add_argument(
+        "--prefix",
+        default=None,
+        help="Output file prefix [default: basename of input]",
     )
     parser.add_argument(
         "-p", "--processors",
@@ -214,10 +219,14 @@ def run_database(db_path, seq_block, seq_fasta, db_name, alphabet, conn,
 def main():
     args = parse_args()
 
-    # Resolve output prefix
-    prefix = args.output or f"{os.path.basename(args.sequence)}.ksort"
-    db_path_out = f"{prefix}.db"
-    aa_fasta = f"{prefix}.aa"
+    # Resolve output directory and prefix
+    input_base = os.path.basename(args.sequence)
+    outdir = args.outdir or f"{input_base}.TEBinSorter"
+    prefix = args.prefix or input_base
+    os.makedirs(outdir, exist_ok=True)
+
+    db_path_out = os.path.join(outdir, f"{prefix}.db")
+    aa_fasta = os.path.join(outdir, f"{prefix}.aa")
 
     # Resolve databases
     if args.max_search:
@@ -231,7 +240,8 @@ def main():
 
     log.info(f"Input: {args.sequence}")
     log.info(f"Databases: {', '.join(db_names)}")
-    log.info(f"Output: {prefix}")
+    log.info(f"Output directory: {outdir}")
+    log.info(f"File prefix: {prefix}")
 
     # Check which alphabets we need
     any_amino = False
@@ -304,7 +314,7 @@ def main():
             )
 
             if args.emit_bath:
-                bath_dir = f"{prefix}.BATHwater"
+                bath_dir = os.path.join(outdir, "BATHwater")
                 log.info(f"  Emitting BATH partitions to {bath_dir}/")
                 emit_partitions(conn, seq_fasta, path, bath_dir,
                                 n_workers=args.processors, db_name=name)
@@ -318,28 +328,31 @@ def main():
     else:
         hit_table = "pass2_hits"
 
+    def outpath(filename):
+        return os.path.join(outdir, filename)
+
     if not args.legacy:
-        p1_tsv = f"{prefix}.pass1.tsv"
+        p1_tsv = outpath(f"{prefix}.pass1.tsv")
         export_tsv(conn, p1_tsv, table="pass1_hits")
         log.info(f"  Raw pass-1 hits: {p1_tsv}")
 
     if not args.pass_1_only:
-        raw_tsv = f"{prefix}.{'legacy' if args.legacy else 'pass2'}.tsv"
+        raw_tsv = outpath(f"{prefix}.{'legacy' if args.legacy else 'pass2'}.tsv")
         export_tsv(conn, raw_tsv, table=hit_table)
         log.info(f"  Raw hits: {raw_tsv}")
 
-        best_tsv = f"{prefix}.best.tsv"
+        best_tsv = outpath(f"{prefix}.best.tsv")
         export_best_hits_tsv(conn, best_tsv, nucl_lengths=nucl_lengths,
                              table=hit_table)
         log.info(f"  Best hits: {best_tsv}")
 
-        domains_tsv = f"{prefix}.domains.tsv"
+        domains_tsv = outpath(f"{prefix}.domains.tsv")
         export_all_domains_tsv(conn, domains_tsv, nucl_lengths=nucl_lengths,
                                table=hit_table)
         log.info(f"  All domains: {domains_tsv}")
 
         if any_amino:
-            dom_faa = f"{prefix}.domains.faa"
+            dom_faa = outpath(f"{prefix}.domains.faa")
             export_domain_sequences(conn, dom_faa, aa_fasta,
                                     nucl_lengths=nucl_lengths,
                                     table=hit_table)
