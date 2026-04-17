@@ -344,8 +344,9 @@ def build_sub_hmms_from_file(hmm_path, window_size=64, max_domains=None,
     return sub_hmms
 
 
-# Window tiers for AA models: try largest first, fall back to smaller
+# Window tiers: try largest first, fall back to smaller
 AA_WINDOW_TIERS = [96, 64, 48, 32]
+DNA_WINDOW_TIERS = [192, 128, 64]
 
 
 def build_sub_hmms_tiered(hmm_path, max_overlap_frac=0.5,
@@ -353,10 +354,10 @@ def build_sub_hmms_tiered(hmm_path, max_overlap_frac=0.5,
                           min_coverage=0.0, max_coverage=1.0):
     """Decompose models using tiered window sizes.
 
-    For each model, tries windows from largest (96) to smallest (32).
-    Uses the largest window that produces facets whose total coverage
-    doesn't exceed the parent model length. Models shorter than 32
-    are returned whole.
+    Auto-detects alphabet: uses AA tiers (96->32) for amino acid models,
+    DNA tiers (192->64) for nucleotide models. For each model, tries
+    the largest window that fits (window < model.M). Models shorter
+    than the smallest tier are returned whole.
 
     Args:
         hmm_path: path to HMM file
@@ -368,21 +369,31 @@ def build_sub_hmms_tiered(hmm_path, max_overlap_frac=0.5,
     Returns:
         list of (sub_hmm, parent_name, start, end) tuples
     """
+    hmms = _load_hmms(hmm_path)
+
+    # Detect alphabet from first model
+    if hmms and hmms[0].alphabet == easel.Alphabet.dna():
+        window_tiers = DNA_WINDOW_TIERS
+        min_size = DNA_WINDOW_TIERS[-1]  # 64
+    else:
+        window_tiers = AA_WINDOW_TIERS
+        min_size = AA_WINDOW_TIERS[-1]  # 32
+
     sub_hmms = []
 
-    for hmm in _load_hmms(hmm_path):
+    for hmm in hmms:
         name = hmm.name
         M = hmm.M
 
-        # Too small to facet at all
-        if M < 32:
+        # Too small to facet
+        if M < min_size:
             sub_hmms.append((hmm, name, 0, M))
             continue
 
-        # Try each tier: largest window that's smaller than the model
+        # Try each tier: largest window smaller than the model
         best_domains = None
 
-        for window in AA_WINDOW_TIERS:
+        for window in window_tiers:
             if window >= M:
                 continue
 
@@ -392,10 +403,9 @@ def build_sub_hmms_tiered(hmm_path, max_overlap_frac=0.5,
 
             if domains:
                 best_domains = domains
-                break  # Largest valid tier wins
+                break
 
         if best_domains is None:
-            # No tier fit -> return whole model
             sub_hmms.append((hmm, name, 0, M))
         else:
             for start, end, score in best_domains:

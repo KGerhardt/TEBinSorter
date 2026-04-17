@@ -20,19 +20,46 @@ from collections import defaultdict
 import pyhmmer
 import pyhmmer.easel as easel
 
-from decompose_hmm import build_sub_hmms_from_file, _load_hmms
+from decompose_hmm import build_sub_hmms_from_file, build_sub_hmms_tiered, _load_hmms
 from model_graph import get_or_build_graph
 from search import (tophits_to_domtbl, parse_domtbl_text, _collect_hits,
                     _partition_hmms_by_size)
 
 log = logging.getLogger(__name__)
 
-# Confidence tiers
-CONF_TIERS = [
-    (20.0, "confirmed_100"),
-    (15.0, "probable_99.9"),
-    (10.0, "probable_86.5"),
-]
+# Confidence tiers per facet size (empirically calibrated)
+# AA models (high information per position)
+AA_CONF_TIERS = {
+    96: [(30.0, "confirmed_100"), (20.0, "probable_99.9"), (15.0, "probable_99"), (10.0, "probable_91")],
+    64: [(15.0, "confirmed_100"), (10.0, "probable_97")],
+    48: [(15.0, "confirmed_100"), (10.0, "probable_97")],  # limited data, use 64's
+    32: [(10.0, "probable_97")],  # limited data
+}
+
+# DNA models (low information per position, scores are much lower)
+DNA_CONF_TIERS = {
+    192: [(20.0, "confirmed_100"), (0.0, "probable_90"), (-20.0, "probable_87")],
+    128: [(50.0, "confirmed_100"), (-5.0, "probable_87")],
+    64:  [(10.0, "confirmed_100"), (5.0, "probable_70")],
+}
+
+CONF_TIERS_DEFAULT = [(20.0, "confirmed_100"), (15.0, "probable_99"), (10.0, "probable_90")]
+
+
+def _get_confidence(score, facet_M, is_dna=False):
+    """Get confidence tier for a facet hit based on score and facet size."""
+    tier_table = DNA_CONF_TIERS if is_dna else AA_CONF_TIERS
+
+    tiers = CONF_TIERS_DEFAULT
+    for size in sorted(tier_table.keys(), reverse=True):
+        if facet_M >= size:
+            tiers = tier_table[size]
+            break
+
+    for threshold, tier_name in tiers:
+        if score >= threshold:
+            return tier_name
+    return "low"
 
 
 def _get_family(model_name):
@@ -57,12 +84,13 @@ def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33,
         log.info(f"    {len(result)} frames in {time.time() - t0:.1f}s")
         return result
 
-    log.info("  Building sub-HMMs")
+    log.info("  Building sub-HMMs (tiered)")
     t0 = time.time()
-    sub_hmms = build_sub_hmms_from_file(
-        hmm_path, window_size=window_size,
-        max_overlap_frac=max_overlap_frac)
+    sub_hmms = build_sub_hmms_tiered(
+        hmm_path, max_overlap_frac=max_overlap_frac)
     parent_map = {s[0].name: s[1] for s in sub_hmms}
+    # Sort largest first for optimal thread utilization
+    sub_hmms.sort(key=lambda s: -s[0].M)
     just_subs = [s[0] for s in sub_hmms]
     t1 = time.time()
     log.info(f"    {len(just_subs)} sub-HMMs in {t1 - t0:.1f}s")
@@ -78,14 +106,19 @@ def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33,
     t2 = time.time()
     log.info(f"    {len(raw_hits)} raw hits in {t2 - t1:.1f}s")
 
-    # Best facet score per (frame, parent_model)
-    result = defaultdict(dict)
+    # Build facet size lookup
+    facet_sizes = {s[0].name: s[0].M for s in sub_hmms}
+
+    # Best facet score per (frame, parent_model), with facet size
+    result = defaultdict(dict)  # frame -> {parent: (score, facet_M)}
     for hit in raw_hits:
         frame = hit["target_name"]
-        parent = parent_map.get(hit["query_name"], hit["query_name"])
+        sub_name = hit["query_name"]
+        parent = parent_map.get(sub_name, sub_name)
         score = hit["dom_score"]
-        if parent not in result[frame] or score > result[frame][parent]:
-            result[frame][parent] = score
+        fM = facet_sizes.get(sub_name, hit["query_len"])
+        if parent not in result[frame] or score > result[frame][parent][0]:
+            result[frame][parent] = (score, fM)
 
     result = dict(result)
     log.info(f"    {len(result)} frames with signal")
@@ -99,7 +132,7 @@ def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33,
 
 
 def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
-                    min_facet_score=10.0, n_workers=4):
+                    min_facet_score=10.0, n_workers=4, is_dna=False):
     """
     Classify frames using facet scores + targeted full-model verification.
 
@@ -125,16 +158,16 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
     unclassified = all_frame_names - frames_with_signal
 
     # Step 1: Find best facet per (frame, family), filtered by min score
-    top_per_family = {}  # (frame, family) -> (model, score)
-    other_hits = defaultdict(list)  # (frame, family) -> [(model, score), ...]
+    top_per_family = {}  # (frame, family) -> (model, score, facet_M)
+    other_hits = defaultdict(list)  # (frame, family) -> [(model, score, facet_M), ...]
 
     for frame, model_scores in facet_hits.items():
         by_family = defaultdict(list)
-        for model, score in model_scores.items():
+        for model, (score, fM) in model_scores.items():
             if score < min_facet_score:
                 continue
             family = _get_family(model)
-            by_family[family].append((model, score))
+            by_family[family].append((model, score, fM))
 
         for family, candidates in by_family.items():
             candidates.sort(key=lambda x: -x[1])
@@ -147,7 +180,7 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
     # Step 2: Verify top picks with full-model nobias search
     # Group frames by their top model for batched searching
     model_frames = defaultdict(list)
-    for (frame, family), (model, score) in top_per_family.items():
+    for (frame, family), (model, score, fM) in top_per_family.items():
         model_frames[model].append((frame, family))
 
     log.info(f"  Verifying against {len(model_frames)} unique models")
@@ -186,19 +219,15 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
     # Step 3: Build classification output
     classifications = []
 
-    for (frame, family), (model, facet_score) in top_per_family.items():
-        # Determine confidence tier
-        confidence = "low"
-        for threshold, tier_name in CONF_TIERS:
-            if facet_score >= threshold:
-                confidence = tier_name
-                break
+    for (frame, family), (model, facet_score, facet_M) in top_per_family.items():
+        confidence = _get_confidence(facet_score, facet_M, is_dna)
 
         entry = {
             "frame": frame,
             "family": family,
             "model": model,
             "facet_score": facet_score,
+            "facet_M": facet_M,
             "confidence": confidence,
             "verified": False,
             "full_score": None,
@@ -215,19 +244,14 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
         classifications.append(entry)
 
         # Add secondary hits as unverified probable assignments
-        for alt_model, alt_score in other_hits.get((frame, family), []):
-            alt_conf = "low"
-            for threshold, tier_name in CONF_TIERS:
-                if alt_score >= threshold:
-                    alt_conf = tier_name
-                    break
-
+        for alt_model, alt_score, alt_fM in other_hits.get((frame, family), []):
             classifications.append({
                 "frame": frame,
                 "family": family,
                 "model": alt_model,
                 "facet_score": alt_score,
-                "confidence": alt_conf,
+                "facet_M": alt_fM,
+                "confidence": _get_confidence(alt_score, alt_fM),
                 "verified": False,
                 "full_score": None,
                 "full_hit": None,
@@ -260,6 +284,14 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
     hmms_dict = {h.name: h for h in hmms}
     Z = len(hmms)
 
+    # Detect DNA vs AA
+    is_dna = hmms[0].alphabet == easel.Alphabet.dna() if hmms else False
+
+    # DNA models use lower score thresholds
+    if is_dna and min_facet_score > 0:
+        min_facet_score = -20.0
+        log.info(f"  DNA database detected, using min_facet_score={min_facet_score}")
+
     # Step 1: Facet screen
     ckpt = None
     if checkpoint_dir:
@@ -274,7 +306,8 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
     # Step 2: Classify
     classifications, unclassified = classify_frames(
         facet_hits, hmms_dict, seq_block, alphabet,
-        min_facet_score=min_facet_score, n_workers=n_workers)
+        min_facet_score=min_facet_score, n_workers=n_workers,
+        is_dna=is_dna)
 
     # Step 3: Legacy fallback on unclassified
     legacy_hits = []
@@ -310,8 +343,8 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
 def export_classifications_tsv(classifications, out_path):
     """Export classifications to TSV."""
     columns = [
-        "frame", "family", "model", "facet_score", "confidence",
-        "verified", "full_score", "is_secondary",
+        "frame", "family", "model", "facet_score", "facet_M",
+        "confidence", "verified", "full_score", "is_secondary",
     ]
 
     with open(out_path, "w") as f:
@@ -322,6 +355,7 @@ def export_classifications_tsv(classifications, out_path):
                 c["family"],
                 c["model"],
                 f"{c['facet_score']:.1f}",
+                c.get("facet_M", ""),
                 c["confidence"],
                 "yes" if c.get("verified") else "no",
                 f"{c['full_score']:.1f}" if c.get("full_score") is not None else "",
