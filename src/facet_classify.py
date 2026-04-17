@@ -264,7 +264,10 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
     log.info(f"  {n_primary} primary assignments, "
              f"{n_verified} verified ({100*n_verified/max(n_primary,1):.1f}%)")
 
-    return classifications, unclassified
+    # Collect all verified hit dicts for database storage
+    verified_hit_list = [hit for hit in verified_results.values()]
+
+    return classifications, unclassified, verified_hit_list
 
 
 def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
@@ -304,7 +307,7 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
         checkpoint_path=ckpt)
 
     # Step 2: Classify
-    classifications, unclassified = classify_frames(
+    classifications, unclassified, verified_hits = classify_frames(
         facet_hits, hmms_dict, seq_block, alphabet,
         min_facet_score=min_facet_score, n_workers=n_workers,
         is_dna=is_dna)
@@ -337,7 +340,7 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
             t1 = time.time()
             log.info(f"    {len(legacy_hits)} legacy hits in {t1 - t0:.1f}s")
 
-    return classifications, legacy_hits
+    return classifications, verified_hits, legacy_hits
 
 
 def export_classifications_tsv(classifications, out_path):

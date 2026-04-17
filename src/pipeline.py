@@ -350,15 +350,18 @@ def main():
 
         if args.facet and alphabet != DNA_ALPHABET:
             t_f0 = time.time()
-            classifications, f_legacy = facet_classify(
+            classifications, f_verified, f_legacy = facet_classify(
                 path, seq_block, seq_fasta, alphabet,
                 n_workers=args.processors,
                 checkpoint_dir=outdir)
             t_f1 = time.time()
             n_primary = sum(1 for c in classifications if not c.get("is_secondary"))
             log.info(f"  Facet mode: {n_primary} assignments, "
+                     f"{len(f_verified)} verified, "
                      f"{len(f_legacy)} legacy hits in {t_f1 - t_f0:.1f}s")
-            # Store legacy fallback hits
+            # Store verified hits (is_legacy=0) and fallback (is_legacy=1)
+            if f_verified:
+                store_legacy(conn, f_verified, name, is_legacy=0)
             if f_legacy:
                 store_legacy(conn, f_legacy, name, is_legacy=1)
             # Export classifications
