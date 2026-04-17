@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.fxi
 *.db
+!database/*.similarity_graph.db
 *.tsv
 *.faa
 *.fasta
