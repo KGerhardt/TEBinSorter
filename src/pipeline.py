@@ -18,6 +18,7 @@ from results import (create_db, store_sequences, store_pass1, store_pass2,
                      store_legacy, export_tsv, export_best_hits_tsv,
                      export_all_domains_tsv, export_domain_sequences)
 from emit import emit_partitions
+from quick import quick_search
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +73,14 @@ def parse_args():
         action="store_true",
         default=False,
         help="Search against all known databases",
+    )
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        default=False,
+        help="Quick mode: sub-HMM triage assigns each frame to its best "
+             "model, confirms with one nobias search, leftovers get full "
+             "legacy search. Faster than default on typical inputs.",
     )
     parser.add_argument(
         "--two-pass",
@@ -305,7 +314,13 @@ def main():
 
         two_pass = args.two_pass or args.pass_1_only or args.emit_bath
 
-        if not two_pass:
+        if args.quick:
+            t_q0 = time.time()
+            q_hits = quick_search(path, seq_block, seq_fasta, alphabet)
+            t_q1 = time.time()
+            log.info(f"  Quick mode: {len(q_hits)} hits in {t_q1 - t_q0:.1f}s")
+            store_legacy(conn, q_hits, name)
+        elif not two_pass:
             run_database_legacy(path, seq_block, name, conn)
         else:
             skip_pass2 = args.pass_1_only or args.emit_bath
