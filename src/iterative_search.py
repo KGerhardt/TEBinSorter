@@ -22,7 +22,7 @@ import pyhmmer.easel as easel
 from decompose_hmm import build_sub_hmms_from_file, _load_hmms
 from model_graph import get_or_build_graph
 from search import (tophits_to_domtbl, parse_domtbl_text, _collect_hits,
-                    _partition_hmms_by_size)
+                    _partition_hmms_by_size)  # _partition still used in legacy fallback
 
 log = logging.getLogger(__name__)
 
@@ -135,24 +135,14 @@ def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33):
     log.info(f"    {len(just_subs)} sub-HMMs built in {t1 - t0:.1f}s")
 
     log.info("  Facet screen: searching")
-    normal, outliers = _partition_hmms_by_size(just_subs)
     sub_Z = len(just_subs)
 
-    raw_hits = []
-    if normal:
-        raw_hits.extend(_collect_hits(pyhmmer.hmmsearch(
-            normal, seq_block,
-            bias_filter=False,
-            Z=sub_Z, domZ=sub_Z, E=1e10, domE=1e10,
-            parallel="queries",
-        )))
-    if outliers:
-        raw_hits.extend(_collect_hits(pyhmmer.hmmsearch(
-            outliers, seq_block,
-            bias_filter=False,
-            Z=sub_Z, domZ=sub_Z, E=1e10, domE=1e10,
-            parallel="targets",
-        )))
+    raw_hits = _collect_hits(pyhmmer.hmmsearch(
+        just_subs, seq_block,
+        bias_filter=False,
+        Z=sub_Z, domZ=sub_Z, E=1e10, domE=1e10,
+        parallel="queries",
+    ))
 
     t2 = time.time()
     log.info(f"    {len(raw_hits)} raw facet hits in {t2 - t1:.1f}s")
@@ -348,14 +338,14 @@ def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
                  f"[active={n_active} resolved={n_resolved} "
                  f"exhausted={n_exhausted}]")
 
-    # Unresolved = frames with no candidates + active/exhausted frames
+    # Unresolved = frames with no candidates + any frame still active or
+    # exhausted (may have partial confirmations but not fully searched)
     unresolved = all_frame_names - frames_with_candidates
     for frame, state in frame_state.items():
-        if state["status"] in ("exhausted",) and not state["confirmed_families"]:
-            # Had candidates but never confirmed anything -> legacy
+        if state["status"] != "resolved":
             unresolved.add(frame)
 
-    return all_confirmed_hits, unresolved
+    return all_confirmed_hits, unresolved, frame_state
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +389,7 @@ def iterative_search(hmm_path, seq_block, seq_fasta, alphabet,
 
     # Step 2: Iterative confirmation
     log.info("  Iterative confirmation:")
-    confirmed, unresolved = iterative_confirm(
+    confirmed, unresolved, frame_state = iterative_confirm(
         frame_candidates, graph, hmms_dict, seq_block,
         seq_lens, alphabet, n_workers, max_rounds, expand_k)
 
@@ -408,32 +398,73 @@ def iterative_search(hmm_path, seq_block, seq_fasta, alphabet,
 
     # Step 3: Legacy fallback on unresolved
     all_hits = list(confirmed)
+    name_to_idx = {seq_block[i].name: i for i in range(len(seq_block))}
 
     if unresolved:
-        log.info(f"  Legacy fallback on {len(unresolved)} frames")
-        name_to_idx = {seq_block[i].name: i for i in range(len(seq_block))}
-        leftover = [seq_block[name_to_idx[f]] for f in unresolved
-                    if f in name_to_idx]
+        # Split unresolved into two groups:
+        # (a) frames with no prior searches (never had facet hits) -> full legacy
+        # (b) frames with partial searches -> targeted remaining-model search
+        no_prior = set()
+        partial = set()
+        all_model_names = set(hmms_dict.keys())
 
-        if leftover:
-            leftover_block = easel.DigitalSequenceBlock(alphabet, leftover)
-            t0 = time.time()
+        for frame in unresolved:
+            if frame in frame_state and frame_state[frame]["searched"]:
+                partial.add(frame)
+            else:
+                no_prior.add(frame)
 
-            normal, outliers = _partition_hmms_by_size(hmms)
-            if normal:
-                all_hits.extend(_collect_hits(pyhmmer.hmmsearch(
-                    normal, leftover_block,
-                    bias_filter=False, Z=Z, domZ=Z, E=1e10, domE=1e10,
-                    parallel="queries",
-                )))
-            if outliers:
-                all_hits.extend(_collect_hits(pyhmmer.hmmsearch(
-                    outliers, leftover_block,
-                    bias_filter=False, Z=Z, domZ=Z, E=1e10, domE=1e10,
-                    parallel="targets",
-                )))
-            t1 = time.time()
-            log.info(f"    {len(all_hits) - len(confirmed)} legacy hits "
-                     f"in {t1 - t0:.1f}s")
+        t0 = time.time()
+
+        # (a) Full legacy on frames with no prior searches
+        if no_prior:
+            log.info(f"  Legacy fallback: {len(no_prior)} frames (no prior searches)")
+            leftover = [seq_block[name_to_idx[f]] for f in no_prior
+                        if f in name_to_idx]
+            if leftover:
+                leftover_block = easel.DigitalSequenceBlock(alphabet, leftover)
+                normal, outliers = _partition_hmms_by_size(hmms)
+                if normal:
+                    all_hits.extend(_collect_hits(pyhmmer.hmmsearch(
+                        normal, leftover_block,
+                        bias_filter=False, Z=Z, domZ=Z, E=1e10, domE=1e10,
+                        parallel="queries",
+                    )))
+                if outliers:
+                    all_hits.extend(_collect_hits(pyhmmer.hmmsearch(
+                        outliers, leftover_block,
+                        bias_filter=False, Z=Z, domZ=Z, E=1e10, domE=1e10,
+                        parallel="targets",
+                    )))
+
+        # (b) Targeted search: for each model, collect frames that haven't
+        #     been searched against it yet
+        if partial:
+            log.info(f"  Targeted fallback: {len(partial)} frames "
+                     f"(completing unsearched models)")
+            jobs = defaultdict(list)
+            for frame in partial:
+                searched = frame_state[frame]["searched"]
+                remaining = all_model_names - searched
+                for model in remaining:
+                    jobs[model].append(frame)
+
+            n_jobs = len(jobs)
+            n_batches = max(n_workers * 8, 1)
+            batches = plan_batches(
+                list(jobs.items()), hmms_dict, seq_lens, n_batches)
+
+            targeted_hits = []
+            for batch in batches:
+                targeted_hits.extend(run_batch(
+                    batch, hmms_dict, seq_block, name_to_idx, alphabet, Z))
+            all_hits.extend(targeted_hits)
+
+            log.info(f"    {len(targeted_hits)} targeted hits "
+                     f"from {n_jobs} model jobs")
+
+        t1 = time.time()
+        log.info(f"  Fallback total: {len(all_hits) - len(confirmed)} hits "
+                 f"in {t1 - t0:.1f}s")
 
     return all_hits

@@ -19,6 +19,7 @@ from results import (create_db, store_sequences, store_pass1, store_pass2,
                      export_all_domains_tsv, export_domain_sequences)
 from emit import emit_partitions
 from quick import quick_search
+from iterative_search import iterative_search
 from id_registry import IDRegistry
 from deconflict import (store_hits_numeric, load_hits_numeric,
                         best_per_family_numeric, best_per_frame_numeric,
@@ -85,6 +86,13 @@ def parse_args():
         help="Quick mode: sub-HMM triage assigns each frame to its best "
              "model, confirms with one nobias search, leftovers get full "
              "legacy search. Faster than default on typical inputs.",
+    )
+    parser.add_argument(
+        "--iterative",
+        action="store_true",
+        default=False,
+        help="Iterative mode: facet screen -> graph-guided confirmation "
+             "rounds -> legacy fallback on unresolved frames.",
     )
     parser.add_argument(
         "--two-pass",
@@ -331,7 +339,17 @@ def main():
 
         two_pass = args.two_pass or args.pass_1_only or args.emit_bath
 
-        if args.quick:
+        if args.iterative:
+            t_i0 = time.time()
+            i_hits = iterative_search(
+                path, seq_block, seq_fasta, alphabet,
+                n_workers=args.processors)
+            t_i1 = time.time()
+            log.info(f"  Iterative mode: {len(i_hits)} hits in {t_i1 - t_i0:.1f}s")
+            store_legacy(conn, i_hits, name)
+            if registry:
+                store_hits_numeric(conn, i_hits, registry)
+        elif args.quick:
             t_q0 = time.time()
             q_hits = quick_search(path, seq_block, seq_fasta, alphabet)
             t_q1 = time.time()

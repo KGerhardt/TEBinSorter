@@ -138,25 +138,31 @@ CREATE TABLE IF NOT EXISTS hits_numeric (
     hmm_to      INTEGER NOT NULL,
     model_len   INTEGER NOT NULL,
     env_from    INTEGER NOT NULL,
-    env_to      INTEGER NOT NULL
+    env_to      INTEGER NOT NULL,
+    phase       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_hn_frame ON hits_numeric(frame_id);
 CREATE INDEX IF NOT EXISTS idx_hn_model ON hits_numeric(model_id);
+CREATE INDEX IF NOT EXISTS idx_hn_phase ON hits_numeric(phase);
 """
 
 
-def store_hits_numeric(conn, hits_dicts, registry):
+def store_hits_numeric(conn, hits_dicts, registry, phase=0):
     """Store hit dicts into the numeric hits table using integer IDs.
 
     Args:
         conn: sqlite3 connection (with registry tables already created)
         hits_dicts: list of hit dicts from parse_domtbl_text
         registry: IDRegistry instance
+        phase: search phase tag:
+               0 = facet screen
+               1-N = confirmation round number
+               -1 = legacy fallback (no prior search)
+               -2 = targeted fallback (partial prior search)
     """
     from id_registry import _parse_family
 
-    # Pre-cache model -> family_id mapping
     model_family_cache = {}
 
     rows = []
@@ -174,23 +180,38 @@ def store_hits_numeric(conn, hits_dicts, registry):
             h["dom_score"], h["i_evalue"], h["acc"],
             h["hmm_from"], h["hmm_to"], h["query_len"],
             h["env_from"], h["env_to"],
+            phase,
         ))
 
     conn.executemany(
-        "INSERT INTO hits_numeric VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO hits_numeric VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
 
 
-def load_hits_numeric(db_path):
-    """Load numeric hits directly into numpy arrays. Fast.
+def load_hits_fast(db_path, table="hits_numeric", database=None):
+    """Load hits into numpy arrays from either numeric or string tables.
+
+    For hits_numeric: direct numpy load, includes phase column.
+    For legacy_hits: string load with derived columns (slower but universal).
+
+    Args:
+        db_path: path to results .db file
+        table: "hits_numeric" or "legacy_hits"
+        database: filter to specific database name (legacy_hits only)
 
     Returns:
-        dict with numpy arrays: frame_id, model_id, family_id,
-        score, evalue, acc, hmm_from, hmm_to, model_len,
-        env_from, env_to, hmm_cov, norm_score
+        dict with numpy arrays
     """
+    if table == "hits_numeric":
+        return _load_numeric(db_path)
+    else:
+        return load_hits(db_path, table=table, database=database)
+
+
+def _load_numeric(db_path):
+    """Load hits_numeric table directly into numpy arrays."""
     conn = sqlite3.connect(db_path)
 
     raw = np.array(
@@ -214,6 +235,7 @@ def load_hits_numeric(db_path):
         "model_len": raw[:, 8].astype(np.int32),
         "env_from":  raw[:, 9].astype(np.int32),
         "env_to":    raw[:, 10].astype(np.int32),
+        "phase":     raw[:, 11].astype(np.int32),
         "hmm_cov":   100.0 * (raw[:, 7] - raw[:, 6] + 1) / raw[:, 8],
         "norm_score": raw[:, 3] / raw[:, 8],
     }
