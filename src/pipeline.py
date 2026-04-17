@@ -19,6 +19,10 @@ from results import (create_db, store_sequences, store_pass1, store_pass2,
                      export_all_domains_tsv, export_domain_sequences)
 from emit import emit_partitions
 from quick import quick_search
+from id_registry import IDRegistry
+from deconflict import (store_hits_numeric, load_hits_numeric,
+                        best_per_family_numeric, best_per_frame_numeric,
+                        NUMERIC_HITS_SCHEMA)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,7 +146,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_database_legacy(db_path, seq_block, db_name, conn):
+def run_database_legacy(db_path, seq_block, db_name, conn, registry=None):
     """
     Legacy mode: single-pass nobias search, all sequences against all models.
     """
@@ -152,6 +156,9 @@ def run_database_legacy(db_path, seq_block, db_name, conn):
     t1 = time.time()
     log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
 
+    if registry:
+        registry.register_models(hmms)
+
     log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
     t2 = time.time()
     hits = legacy_search(hmms, seq_block)
@@ -159,6 +166,14 @@ def run_database_legacy(db_path, seq_block, db_name, conn):
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
     store_legacy(conn, hits, db_name)
+
+    if registry:
+        log.info(f"  Storing numeric hits")
+        t4 = time.time()
+        store_hits_numeric(conn, hits, registry)
+        t5 = time.time()
+        log.info(f"  Numeric storage in {t5 - t4:.1f}s")
+
     return len(hits)
 
 
@@ -266,8 +281,10 @@ def main():
             any_nucl = True
         log.info(f"  {name}: {alphabet}, translate={'yes' if alphabet == AMINO_ALPHABET else 'no'}")
 
-    # Create results database
+    # Create results database and ID registry
     conn = create_db(db_path_out)
+    conn.executescript(NUMERIC_HITS_SCHEMA)
+    registry = IDRegistry(conn)
 
     # Read input and store sequence metadata
     t_start = time.time()
@@ -321,7 +338,7 @@ def main():
             log.info(f"  Quick mode: {len(q_hits)} hits in {t_q1 - t_q0:.1f}s")
             store_legacy(conn, q_hits, name)
         elif not two_pass:
-            run_database_legacy(path, seq_block, name, conn)
+            run_database_legacy(path, seq_block, name, conn, registry=registry)
         else:
             skip_pass2 = args.pass_1_only or args.emit_bath
             p1, p2 = run_database(

@@ -154,18 +154,23 @@ def store_hits_numeric(conn, hits_dicts, registry):
         hits_dicts: list of hit dicts from parse_domtbl_text
         registry: IDRegistry instance
     """
-    conn.executescript(NUMERIC_HITS_SCHEMA)
+    from id_registry import _parse_family
+
+    # Pre-cache model -> family_id mapping
+    model_family_cache = {}
 
     rows = []
     for h in hits_dicts:
         fid = registry.frame_id(h["target_name"])
         mid = registry.model_id(h["query_name"])
-        fam = registry.family_id(registry.conn.execute(
-            "SELECT family FROM id_models WHERE id = ?", (mid,)
-        ).fetchone()[0] if registry.model_name(mid) else "unknown")
+
+        if mid not in model_family_cache:
+            family_name = _parse_family(h["query_name"])
+            model_family_cache[mid] = registry.family_id(family_name)
+        fam_id = model_family_cache[mid]
 
         rows.append((
-            fid, mid, fam,
+            fid, mid, fam_id,
             h["dom_score"], h["i_evalue"], h["acc"],
             h["hmm_from"], h["hmm_to"], h["query_len"],
             h["env_from"], h["env_to"],
