@@ -18,8 +18,7 @@ from collections import defaultdict
 import pyhmmer
 import pyhmmer.easel as easel
 
-from hmm import load_hmms
-from decompose_hmm import build_sub_hmms
+from decompose_hmm import build_sub_hmms_from_file, _load_hmms
 from search import (tophits_to_domtbl, parse_domtbl_text, _collect_hits,
                     _partition_hmms_by_size, build_sequence_block)
 
@@ -66,15 +65,15 @@ def quick_search(hmm_path, seq_block, seq_fasta, alphabet,
     Returns:
         all_hits: list of hit dicts (combined from all tiers)
     """
-    hmms = load_hmms(hmm_path)
+    hmms = _load_hmms(hmm_path)
     hmms_dict = {h.name: h for h in hmms}
     Z = len(hmms)
 
     # --- Tier 1: Sub-HMM screen ---
     log.info("    Tier 1: sub-HMM screen")
     t0 = time.time()
-    sub_hmms = build_sub_hmms(hmm_path, window_size=window_size,
-                               max_overlap_frac=max_overlap_frac)
+    sub_hmms = build_sub_hmms_from_file(hmm_path, window_size=window_size,
+                                         max_overlap_frac=max_overlap_frac)
     parent_map = {s[0].name: s[1] for s in sub_hmms}
     just_subs = [s[0] for s in sub_hmms]
     t1 = time.time()

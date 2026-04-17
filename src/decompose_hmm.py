@@ -1,21 +1,37 @@
 """
 decompose_hmm.py — Decompose HMM models into high-scoring sub-model domains.
 
-For each HMM, finds non-overlapping windows of N positions that maximize
-emission log-odds score. These sub-models are the most informative
-regions of the model — ideal for fast pre-screening.
+Standalone module with no project-specific dependencies. Takes pyhmmer HMM
+objects in, returns pyhmmer HMM objects out. Works with DNA and amino acid
+alphabets.
 
-Adapted from jewelry_hammer for TEBinSorter.
+Core API:
+    compute_log_odds(hmm)           → (M+1, K) position score matrix
+    score_positions(hmm)            → length-M array of per-position scores
+    find_domains(scores, window)    → [(start, end, score), ...]
+    decompose_model(hmm, window)    → (name, M, domains, scores)
+    splice_sub_hmm(hmm, start, end) → searchable sub-HMM pyhmmer object
+
+Higher-level (takes file paths, loads HMMs internally):
+    decompose_file(path, window)    → {name: [(start, end, score), ...]}
+    build_sub_hmms_from_file(path)  → [(sub_hmm, parent_name, start, end)]
+
+Usage:
+    python decompose_hmm.py database.hmm --window 64 --overlap 0.33
 """
 
 import argparse
+import io
 import sys
+
 import numpy as np
-
-from pyhmmer.plan7 import HMMFile
 import pyhmmer.easel as easel
+import pyhmmer.plan7 as plan7
 
-# Background frequencies
+# ---------------------------------------------------------------------------
+# Background frequencies for log-odds computation
+# ---------------------------------------------------------------------------
+
 DNA_BG = np.array([0.2869, 0.1899, 0.2161, 0.3072])  # A C G T
 
 # Robinson-Robinson amino acid background (HMMER default)
@@ -28,10 +44,21 @@ AA_BG = np.array([
 ])
 
 
+# ---------------------------------------------------------------------------
+# Core functions — operate on pyhmmer HMM objects, no file I/O
+# ---------------------------------------------------------------------------
+
 def compute_log_odds(hmm):
-    """Compute log-odds emission scores for all positions.
-    Auto-detects DNA vs amino acid alphabet.
-    Returns (M+1, K) array where K is alphabet size.
+    """Compute log-odds emission scores for all match positions.
+
+    Auto-detects DNA vs amino acid from the HMM's alphabet.
+
+    Args:
+        hmm: pyhmmer.plan7.HMM object
+
+    Returns:
+        (M+1, K) numpy array. Row 0 is unused (HMMER convention).
+        K = 4 for DNA, 20 for amino acid.
     """
     M = hmm.M
     me = hmm.match_emissions
@@ -53,27 +80,42 @@ def compute_log_odds(hmm):
 
 def score_positions(hmm):
     """Compute per-position informativeness score.
+
     Returns array of length M with the max log-odds at each position.
+    Higher = more informative (strongest base/residue is more distinct
+    from background).
     """
     lo = compute_log_odds(hmm)
     return np.max(lo[1:], axis=1)  # skip row 0
 
 
 def find_domains(position_scores, window_size, max_domains=None,
-                 min_score_per_base=0.0, max_overlap_frac=0.0):
+                 min_score_per_base=0.0, max_overlap_frac=0.0,
+                 min_coverage=0.0, max_coverage=1.0):
     """Greedy window selection by total score with configurable overlap.
+
+    Finds the highest-scoring non-overlapping (or partially overlapping)
+    windows in a position score array. These are the most informative
+    regions of the model.
 
     Args:
         position_scores: array of per-position scores, length M
-        window_size: sub-model size N
-        max_domains: optional cap on number of domains
-        min_score_per_base: minimum average score per base to accept a window
-        max_overlap_frac: maximum fraction of window that can overlap with
-                          already-selected domains (0.0 = no overlap,
-                          0.33 = up to 33% overlap)
+        window_size: sub-model size in positions
+        max_domains: optional cap on number of domains to return
+        min_score_per_base: minimum average score per position to accept
+        max_overlap_frac: maximum fraction of window that can overlap
+                          with already-selected domains (0.0 = none,
+                          0.33 = up to 33%)
+        min_coverage: minimum fraction of parent model that must be
+                      covered by selected domains (0.0 = no minimum).
+                      Selection continues until this is met even if
+                      score falls below min_score_per_base.
+        max_coverage: maximum fraction of parent model to cover
+                      (1.0 = no limit). Selection stops when reached.
 
     Returns:
-        list of (start_pos, end_pos, total_score) sorted by model position
+        list of (start, end, total_score) sorted by model position.
+        Positions are 0-based.
     """
     M = len(position_scores)
     if M < window_size:
@@ -81,25 +123,28 @@ def find_domains(position_scores, window_size, max_domains=None,
 
     max_overlap = int(window_size * max_overlap_frac)
 
-    # Score all windows
+    # Sliding window sums
     n_windows = M - window_size + 1
     window_scores = np.zeros(n_windows)
-    # Sliding sum
     window_scores[0] = np.sum(position_scores[:window_size])
     for i in range(1, n_windows):
-        window_scores[i] = (window_scores[i-1]
-                            - position_scores[i-1]
+        window_scores[i] = (window_scores[i - 1]
+                            - position_scores[i - 1]
                             + position_scores[i + window_size - 1])
 
-    # Greedy selection: pick best window, allow partial overlap
-    used = np.zeros(M, dtype=int)  # count how many domains cover each position
+    # Greedy selection
+    used = np.zeros(M, dtype=int)
     domains = []
 
     while True:
         if max_domains is not None and len(domains) >= max_domains:
             break
 
-        # Mask windows that exceed overlap budget
+        # Check max coverage
+        covered = int(np.sum(used > 0))
+        if covered / M >= max_coverage:
+            break
+
         valid_scores = window_scores.copy()
         for i in range(n_windows):
             overlap_count = int(np.sum(used[i:i + window_size] > 0))
@@ -111,7 +156,11 @@ def find_domains(position_scores, window_size, max_domains=None,
 
         if best_score == -np.inf:
             break
-        if best_score / window_size < min_score_per_base:
+
+        # Allow low-scoring windows if we haven't met min_coverage
+        coverage_so_far = covered / M
+        if (best_score / window_size < min_score_per_base
+                and coverage_so_far >= min_coverage):
             break
 
         start = best_idx
@@ -119,75 +168,56 @@ def find_domains(position_scores, window_size, max_domains=None,
         domains.append((start, end, float(best_score)))
         used[start:end] += 1
 
-    # Sort by position
     domains.sort(key=lambda d: d[0])
     return domains
 
 
 def decompose_model(hmm, window_size, max_domains=None,
-                    min_score_per_base=0.0, max_overlap_frac=0.0):
-    """Decompose one HMM into sub-model domains.
+                    min_score_per_base=0.0, max_overlap_frac=0.0,
+                    min_coverage=0.0, max_coverage=1.0):
+    """Decompose one HMM into high-scoring sub-model domains.
+
+    Args:
+        hmm: pyhmmer.plan7.HMM object
+        window_size: sub-model window size in positions
+        max_domains: optional cap
+        min_score_per_base: minimum average score to accept a window
+        max_overlap_frac: overlap budget between windows
+        min_coverage: minimum parent model coverage fraction
+        max_coverage: maximum parent model coverage fraction
 
     Returns:
-        name: model name
-        M: model length
-        domains: list of (start, end, score) tuples (0-based model positions)
-        position_scores: per-position score array
+        (name, M, domains, position_scores) where domains is a list
+        of (start, end, score) tuples with 0-based positions.
     """
     name = hmm.name if isinstance(hmm.name, str) else hmm.name.decode()
     M = hmm.M
 
-    position_scores = score_positions(hmm)
-    domains = find_domains(position_scores, window_size, max_domains,
-                           min_score_per_base, max_overlap_frac)
+    ps = score_positions(hmm)
+    domains = find_domains(ps, window_size, max_domains,
+                           min_score_per_base, max_overlap_frac,
+                           min_coverage, max_coverage)
 
-    return name, M, domains, position_scores
-
-
-def decompose_database(hmm_path, window_size=64, max_domains=None,
-                       min_score_per_base=0.0, max_overlap_frac=0.0):
-    """Decompose all models in an HMM database file.
-
-    Args:
-        hmm_path: path to HMM database file (multi-model)
-        window_size: sub-model window size
-        max_domains: optional cap per model
-        min_score_per_base: minimum avg score to accept a window
-        max_overlap_frac: maximum overlap fraction between windows
-
-    Returns:
-        dict of {model_name: [(start, end, score), ...]}
-    """
-    from hmm import load_hmms
-
-    hmms = load_hmms(hmm_path)
-    results = {}
-
-    for hmm in hmms:
-        name, M, domains, _ = decompose_model(
-            hmm, window_size, max_domains, min_score_per_base,
-            max_overlap_frac)
-        results[name] = domains
-
-    return results
+    return name, M, domains, ps
 
 
 def splice_sub_hmm(src_hmm, start, end):
-    """
-    Splice a sub-HMM from a parent model by copying emission and
-    transition probabilities for positions start:end.
+    """Splice a sub-HMM from a parent by copying profile probabilities.
+
+    Copies match emissions, insert emissions, and transition probabilities
+    for positions start:end from the parent model into a new HMM object.
+    The result is a fully valid pyhmmer HMM that can be searched directly.
+
+    Works with both DNA and amino acid models.
 
     Args:
-        src_hmm: parent pyhmmer HMM
+        src_hmm: parent pyhmmer.plan7.HMM
         start: 0-based start position in parent model
         end: 0-based end position (exclusive)
 
     Returns:
-        pyhmmer HMM object ready for searching
+        pyhmmer.plan7.HMM — a new HMM covering only the specified region
     """
-    import pyhmmer.plan7 as plan7
-    import io
-
     sub_M = end - start
     alphabet = src_hmm.alphabet
     K = alphabet.K  # 4 for DNA, 20 for amino
@@ -197,7 +227,6 @@ def splice_sub_hmm(src_hmm, start, end):
 
     sub = plan7.HMM(alphabet, M=sub_M, name=sub_name)
 
-    # Copy emissions and transitions from parent
     for i in range(1, sub_M + 1):
         src_i = int(start + i)
         for j in range(K):
@@ -207,7 +236,6 @@ def splice_sub_hmm(src_hmm, start, end):
             sub.transition_probabilities[i][j] = float(
                 src_hmm.transition_probabilities[src_i][j])
 
-    # Entry state transitions
     for j in range(7):
         sub.transition_probabilities[0][j] = float(
             src_hmm.transition_probabilities[0][j])
@@ -215,7 +243,9 @@ def splice_sub_hmm(src_hmm, start, end):
     sub.set_composition()
     sub.consensus = src_hmm.consensus[start:end]
 
-    # Write, inject STATS lines, reload for a fully valid HMM
+    # Write to text, inject required STATS fields, reload as valid HMM.
+    # pyhmmer's ProfileConfig requires STATS LOCAL MSV/VITERBI/FORWARD
+    # to be present or it returns eslEINVAL.
     buf = io.BytesIO()
     sub.write(buf)
     text = buf.getvalue().decode()
@@ -236,27 +266,66 @@ def splice_sub_hmm(src_hmm, start, end):
         return next(hf)
 
 
-def build_sub_hmms(hmm_path, window_size=25, max_domains=None,
-                   min_score_per_base=0.0, max_overlap_frac=0.0):
-    """
-    Decompose all models in a database and build searchable sub-HMMs.
+# ---------------------------------------------------------------------------
+# Convenience functions — load from files
+# ---------------------------------------------------------------------------
+
+def _load_hmms(hmm_path):
+    """Load all HMMs from a file. Standalone version with no dependencies."""
+    hmms = []
+    with plan7.HMMFile(hmm_path) as hf:
+        for hmm in hf:
+            hmms.append(hmm)
+    return hmms
+
+
+def decompose_file(hmm_path, window_size=64, max_domains=None,
+                   min_score_per_base=0.0, max_overlap_frac=0.0,
+                   min_coverage=0.0, max_coverage=1.0):
+    """Decompose all models in an HMM database file.
 
     Args:
-        hmm_path: path to HMM database file
-        window_size: sub-model window size (default 25 for amino, 64 for DNA)
+        hmm_path: path to HMM file (single or multi-model)
+        window_size: sub-model window size
         max_domains: optional cap per model
         min_score_per_base: minimum avg score to accept a window
-        max_overlap_frac: maximum overlap fraction between windows
+        max_overlap_frac: overlap budget between windows
+        min_coverage: minimum parent model coverage fraction
+        max_coverage: maximum parent model coverage fraction
 
     Returns:
-        list of (sub_hmm, parent_name, start, end) tuples
+        dict of {model_name: [(start, end, score), ...]}
     """
-    from hmm import load_hmms
+    results = {}
+    for hmm in _load_hmms(hmm_path):
+        name, M, domains, _ = decompose_model(
+            hmm, window_size, max_domains, min_score_per_base,
+            max_overlap_frac, min_coverage, max_coverage)
+        results[name] = domains
+    return results
 
-    hmms = load_hmms(hmm_path)
+
+def build_sub_hmms_from_file(hmm_path, window_size=64, max_domains=None,
+                             min_score_per_base=0.0, max_overlap_frac=0.0,
+                             min_coverage=0.0, max_coverage=1.0):
+    """Decompose all models in a file and build searchable sub-HMMs.
+
+    Args:
+        hmm_path: path to HMM file
+        window_size: sub-model window size
+        max_domains: optional cap per model
+        min_score_per_base: minimum avg score to accept a window
+        max_overlap_frac: overlap budget between windows
+        min_coverage: minimum parent model coverage fraction
+        max_coverage: maximum parent model coverage fraction
+
+    Returns:
+        list of (sub_hmm, parent_name, start, end) tuples.
+        Models smaller than window_size are returned as-is.
+    """
     sub_hmms = []
 
-    for hmm in hmms:
+    for hmm in _load_hmms(hmm_path):
         name = hmm.name
         M = hmm.M
 
@@ -266,7 +335,7 @@ def build_sub_hmms(hmm_path, window_size=25, max_domains=None,
 
         _, _, domains, _ = decompose_model(
             hmm, window_size, max_domains, min_score_per_base,
-            max_overlap_frac)
+            max_overlap_frac, min_coverage, max_coverage)
 
         for start, end, score in domains:
             sub = splice_sub_hmm(hmm, start, end)
@@ -275,53 +344,58 @@ def build_sub_hmms(hmm_path, window_size=25, max_domains=None,
     return sub_hmms
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(
         description="Decompose HMM models into high-scoring sub-model domains")
     parser.add_argument("hmm_file",
                         help="HMM database file (single or multi-model)")
     parser.add_argument("--window", type=int, default=64,
-                        help="Sub-model window size (default 64)")
+                        help="Sub-model window size [default: 64]")
+    parser.add_argument("--overlap", type=float, default=0.0,
+                        help="Max overlap fraction between windows [default: 0.0]")
     parser.add_argument("--max-domains", type=int, default=None,
-                        help="Max domains per model (default: no limit)")
+                        help="Max domains per model [default: no limit]")
     parser.add_argument("--min-score-per-base", type=float, default=0.0,
-                        help="Minimum avg score/base to accept domain")
+                        help="Minimum avg score/position to accept [default: 0.0]")
+    parser.add_argument("--min-coverage", type=float, default=0.0,
+                        help="Minimum parent model coverage fraction [default: 0.0]")
+    parser.add_argument("--max-coverage", type=float, default=1.0,
+                        help="Maximum parent model coverage fraction [default: 1.0]")
     parser.add_argument("--output", default=None,
-                        help="Output TSV (default: stdout)")
+                        help="Output TSV [default: stdout]")
     args = parser.parse_args()
 
-    from hmm import load_hmms
-    hmms = load_hmms(args.hmm_file)
-
     results = []
-    for hmm in hmms:
+    for hmm in _load_hmms(args.hmm_file):
         name, M, domains, pos_scores = decompose_model(
-            hmm, args.window, args.max_domains, args.min_score_per_base)
+            hmm, args.window, args.max_domains, args.min_score_per_base,
+            args.overlap, args.min_coverage, args.max_coverage)
         results.append((name, M, domains, pos_scores))
 
     out = open(args.output, "w") if args.output else sys.stdout
 
-    out.write(f"model\tM\tn_domains\tdomain_bp\tcoverage\t"
-              f"domains\tavg_score_per_base\n")
+    out.write("model\tM\tn_domains\tdomain_pos\tcoverage\t"
+              "domains\tavg_score_per_pos\n")
 
     total_M = 0
-    total_domain_bp = 0
+    total_domain = 0
 
-    for name, M, domains, pos_scores in sorted(results, key=lambda r: -r[1]):
+    for name, M, domains, _ in sorted(results, key=lambda r: -r[1]):
         n_dom = len(domains)
-        domain_bp = sum(e - s for s, e, _ in domains)
-        coverage = domain_bp / M if M > 0 else 0
+        domain_pos = sum(e - s for s, e, _ in domains)
+        coverage = domain_pos / M if M > 0 else 0
         total_M += M
-        total_domain_bp += domain_bp
+        total_domain += domain_pos
 
-        dom_strs = []
-        for s, e, sc in domains:
-            avg = sc / (e - s)
-            dom_strs.append(f"{s}-{e}({sc:.1f})")
+        dom_strs = [f"{s}-{e}({sc:.1f})" for s, e, sc in domains]
+        avg_spb = (sum(sc for _, _, sc in domains) / domain_pos
+                   if domain_pos else 0)
 
-        avg_spb = sum(sc for _, _, sc in domains) / domain_bp if domain_bp else 0
-
-        out.write(f"{name}\t{M}\t{n_dom}\t{domain_bp}\t{coverage:.2f}\t"
+        out.write(f"{name}\t{M}\t{n_dom}\t{domain_pos}\t{coverage:.2f}\t"
                   f"{','.join(dom_strs)}\t{avg_spb:.2f}\n")
 
     if out is not sys.stdout:
@@ -329,13 +403,14 @@ def main():
 
     n_models = len(results)
     n_domains = sum(len(d) for _, _, d, _ in results)
-    print(f"\n{n_models} models -> {n_domains} domains at window={args.window}",
+    print(f"\n{n_models} models -> {n_domains} domains at window={args.window}"
+          f" overlap={args.overlap:.0%}",
           file=sys.stderr)
     print(f"  Total model positions: {total_M:,}", file=sys.stderr)
-    print(f"  Total domain positions: {total_domain_bp:,} "
-          f"({100*total_domain_bp/total_M:.1f}% of model space)",
+    print(f"  Total domain positions: {total_domain:,} "
+          f"({100 * total_domain / total_M:.1f}% coverage)",
           file=sys.stderr)
-    print(f"  Avg domains/model: {n_domains/n_models:.1f}", file=sys.stderr)
+    print(f"  Avg domains/model: {n_domains / n_models:.1f}", file=sys.stderr)
 
 
 if __name__ == "__main__":
