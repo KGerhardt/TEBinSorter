@@ -119,8 +119,8 @@ def _partition_hmms_by_size(hmms):
     """
     Partition HMMs into normal and outlier groups by M^2 cost.
 
-    Uses the standard IQR outlier definition: any model with
-    M^2 > Q3 + 1.5 * IQR is an outlier. Outliers benefit from
+    Uses a 2x IQR outlier definition: any model with
+    M^2 > Q3 + 2.0 * IQR is an outlier. Outliers benefit from
     parallel='targets' (parallelize over sequences), while normal
     models are faster with parallel='queries' (parallelize over models).
 
@@ -134,7 +134,7 @@ def _partition_hmms_by_size(hmms):
     q1 = statistics.median(m2_values[:len(m2_values) // 2])
     q3 = statistics.median(m2_values[(len(m2_values) + 1) // 2:])
     iqr = q3 - q1
-    threshold = q3 + 1.5 * iqr
+    threshold = q3 + 2.0 * iqr
 
     normal = [h for h in hmms if h.M ** 2 <= threshold]
     outliers = [h for h in hmms if h.M ** 2 > threshold]
