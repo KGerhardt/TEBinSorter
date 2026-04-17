@@ -1,8 +1,11 @@
 """
 deconflict.py — Fast in-memory deconfliction and export of HMM search results.
 
-Loads all hits from SQLite into numpy arrays, computes best-per-family
+Loads hits from SQLite into numpy arrays, computes best-per-family
 assignments in one pass, exports clean flat files.
+
+Supports both string-based tables (legacy_hits) and integer-ID tables
+(hits_numeric) for maximum load speed on large datasets.
 """
 
 import sqlite3
@@ -121,6 +124,118 @@ def best_per_seq_model(hits):
     sort_idx = np.argsort(-hits["score"])
     _, first_idx = np.unique(keys[sort_idx], return_index=True)
     return sort_idx[first_idx]
+
+
+NUMERIC_HITS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS hits_numeric (
+    frame_id    INTEGER NOT NULL,
+    model_id    INTEGER NOT NULL,
+    family_id   INTEGER NOT NULL,
+    score       REAL NOT NULL,
+    evalue      REAL NOT NULL,
+    acc         REAL NOT NULL,
+    hmm_from    INTEGER NOT NULL,
+    hmm_to      INTEGER NOT NULL,
+    model_len   INTEGER NOT NULL,
+    env_from    INTEGER NOT NULL,
+    env_to      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hn_frame ON hits_numeric(frame_id);
+CREATE INDEX IF NOT EXISTS idx_hn_model ON hits_numeric(model_id);
+"""
+
+
+def store_hits_numeric(conn, hits_dicts, registry):
+    """Store hit dicts into the numeric hits table using integer IDs.
+
+    Args:
+        conn: sqlite3 connection (with registry tables already created)
+        hits_dicts: list of hit dicts from parse_domtbl_text
+        registry: IDRegistry instance
+    """
+    conn.executescript(NUMERIC_HITS_SCHEMA)
+
+    rows = []
+    for h in hits_dicts:
+        fid = registry.frame_id(h["target_name"])
+        mid = registry.model_id(h["query_name"])
+        fam = registry.family_id(registry.conn.execute(
+            "SELECT family FROM id_models WHERE id = ?", (mid,)
+        ).fetchone()[0] if registry.model_name(mid) else "unknown")
+
+        rows.append((
+            fid, mid, fam,
+            h["dom_score"], h["i_evalue"], h["acc"],
+            h["hmm_from"], h["hmm_to"], h["query_len"],
+            h["env_from"], h["env_to"],
+        ))
+
+    conn.executemany(
+        "INSERT INTO hits_numeric VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def load_hits_numeric(db_path):
+    """Load numeric hits directly into numpy arrays. Fast.
+
+    Returns:
+        dict with numpy arrays: frame_id, model_id, family_id,
+        score, evalue, acc, hmm_from, hmm_to, model_len,
+        env_from, env_to, hmm_cov, norm_score
+    """
+    conn = sqlite3.connect(db_path)
+
+    raw = np.array(
+        conn.execute("SELECT * FROM hits_numeric").fetchall(),
+        dtype=np.float64,
+    )
+    conn.close()
+
+    if raw.size == 0:
+        return None
+
+    return {
+        "frame_id":  raw[:, 0].astype(np.int64),
+        "model_id":  raw[:, 1].astype(np.int64),
+        "family_id": raw[:, 2].astype(np.int64),
+        "score":     raw[:, 3],
+        "evalue":    raw[:, 4],
+        "acc":       raw[:, 5],
+        "hmm_from":  raw[:, 6].astype(np.int32),
+        "hmm_to":    raw[:, 7].astype(np.int32),
+        "model_len": raw[:, 8].astype(np.int32),
+        "env_from":  raw[:, 9].astype(np.int32),
+        "env_to":    raw[:, 10].astype(np.int32),
+        "hmm_cov":   100.0 * (raw[:, 7] - raw[:, 6] + 1) / raw[:, 8],
+        "norm_score": raw[:, 3] / raw[:, 8],
+    }
+
+
+def _unique_best(keys, scores):
+    """Generic: for each unique key, return the index with the highest score."""
+    sort_idx = np.argsort(-scores)
+    _, first_idx = np.unique(keys[sort_idx], return_index=True)
+    return sort_idx[first_idx]
+
+
+def best_per_family_numeric(hits):
+    """Best score per (frame_id, family_id).
+
+    Uses structured array for collision-free composite keys.
+    """
+    keys = np.array(
+        list(zip(hits["frame_id"], hits["family_id"])),
+        dtype=[("f", np.int64), ("fam", np.int64)],
+    )
+    return _unique_best(keys, hits["score"])
+
+
+def best_per_frame_numeric(hits):
+    """Single best hit per frame_id."""
+    return _unique_best(hits["frame_id"], hits["score"])
 
 
 def export_best_tsv(hits, indices, out_path, nucl_lengths=None):
