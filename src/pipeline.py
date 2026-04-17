@@ -20,6 +20,7 @@ from results import (create_db, store_sequences, store_pass1, store_pass2,
 from emit import emit_partitions
 from quick import quick_search
 from iterative_search import iterative_search
+from facet_classify import facet_classify, export_classifications_tsv
 from id_registry import IDRegistry
 from deconflict import (store_hits_numeric, load_hits_fast,
                         best_per_family_numeric, best_per_frame_numeric,
@@ -86,6 +87,14 @@ def parse_args():
         help="Quick mode: sub-HMM triage assigns each frame to its best "
              "model, confirms with one nobias search, leftovers get full "
              "legacy search. Faster than default on typical inputs.",
+    )
+    parser.add_argument(
+        "--facet",
+        action="store_true",
+        default=False,
+        help="Facet mode: sub-HMM screen -> verify top hit per family -> "
+             "confidence-tiered reporting -> legacy fallback. Fastest mode "
+             "with ~94%% family recall.",
     )
     parser.add_argument(
         "--iterative",
@@ -339,7 +348,27 @@ def main():
 
         two_pass = args.two_pass or args.pass_1_only or args.emit_bath
 
-        if args.iterative:
+        if args.facet and alphabet != DNA_ALPHABET:
+            t_f0 = time.time()
+            classifications, f_legacy = facet_classify(
+                path, seq_block, seq_fasta, alphabet,
+                n_workers=args.processors,
+                checkpoint_dir=outdir)
+            t_f1 = time.time()
+            n_primary = sum(1 for c in classifications if not c.get("is_secondary"))
+            log.info(f"  Facet mode: {n_primary} assignments, "
+                     f"{len(f_legacy)} legacy hits in {t_f1 - t_f0:.1f}s")
+            # Store legacy fallback hits
+            if f_legacy:
+                store_legacy(conn, f_legacy, name)
+            # Export classifications
+            cls_tsv = os.path.join(outdir, f"{prefix}.{name}.classifications.tsv")
+            export_classifications_tsv(classifications, cls_tsv)
+            log.info(f"  Classifications: {cls_tsv}")
+        elif args.facet and alphabet == DNA_ALPHABET:
+            log.info(f"  DNA database: using legacy search (facets AA-only)")
+            run_database_legacy(path, seq_block, name, conn, registry=registry)
+        elif args.iterative:
             t_i0 = time.time()
             i_hits = iterative_search(
                 path, seq_block, seq_fasta, alphabet,
