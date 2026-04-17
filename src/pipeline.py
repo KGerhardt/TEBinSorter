@@ -21,7 +21,7 @@ from emit import emit_partitions
 from quick import quick_search
 from iterative_search import iterative_search
 from id_registry import IDRegistry
-from deconflict import (store_hits_numeric, load_hits_numeric,
+from deconflict import (store_hits_numeric, load_hits_fast,
                         best_per_family_numeric, best_per_frame_numeric,
                         NUMERIC_HITS_SCHEMA)
 
@@ -343,7 +343,8 @@ def main():
             t_i0 = time.time()
             i_hits = iterative_search(
                 path, seq_block, seq_fasta, alphabet,
-                n_workers=args.processors)
+                n_workers=args.processors,
+                checkpoint_dir=outdir)
             t_i1 = time.time()
             log.info(f"  Iterative mode: {len(i_hits)} hits in {t_i1 - t_i0:.1f}s")
             store_legacy(conn, i_hits, name)

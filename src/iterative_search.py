@@ -13,6 +13,7 @@ and is reused across all rounds.
 
 import json
 import logging
+import os
 import time
 from collections import defaultdict
 
@@ -117,13 +118,32 @@ def run_batch(batch, hmms_dict, seq_block, name_to_idx, alphabet, Z):
 # Facet screen
 # ---------------------------------------------------------------------------
 
-def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33):
+def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33,
+                 checkpoint_path=None):
     """Run sub-HMM screen against all frames.
+
+    If checkpoint_path is set and the file exists, loads cached results.
+    Otherwise runs the screen and saves to checkpoint.
 
     Returns:
         frame_candidates: {frame_name: [(parent_model, score), ...]}
             sorted by score descending, deduplicated by parent model
     """
+    # Try loading checkpoint
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        log.info(f"  Facet screen: loading checkpoint {checkpoint_path}")
+        t0 = time.time()
+        with open(checkpoint_path) as f:
+            frame_candidates = json.load(f)
+        # Convert lists back to list-of-tuples
+        frame_candidates = {
+            k: [(m, s) for m, s in v]
+            for k, v in frame_candidates.items()
+        }
+        t1 = time.time()
+        log.info(f"    {len(frame_candidates)} frames loaded in {t1 - t0:.1f}s")
+        return frame_candidates
+
     log.info("  Facet screen: building sub-HMMs")
     t0 = time.time()
     sub_hmms = build_sub_hmms_from_file(
@@ -162,6 +182,13 @@ def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33):
         frame_candidates[frame] = ranked
 
     log.info(f"    {len(frame_candidates)} frames with candidates")
+
+    # Save checkpoint
+    if checkpoint_path:
+        with open(checkpoint_path, "w") as f:
+            json.dump(frame_candidates, f)
+        log.info(f"    Checkpoint saved: {checkpoint_path}")
+
     return frame_candidates
 
 
@@ -171,7 +198,8 @@ def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33):
 
 def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
                       seq_lens, alphabet, n_workers=4,
-                      max_rounds=5, expand_k=10):
+                      max_rounds=5, expand_k=10,
+                      eject_evalue=1e-10):
     """Iterative confirmation: facet hits → graph expansion → convergence.
 
     Args:
@@ -211,6 +239,7 @@ def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
             "queue": list(candidates),
             "best_per_family": defaultdict(float),
             "confirmed_families": set(),
+            "ejected_families": set(),
             "declining_count": defaultdict(int),  # consecutive declines per family
             "status": "active",
         }
@@ -267,6 +296,7 @@ def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
 
         # Update frame state
         n_confirmed = 0
+        n_ejected = 0
         for model, frames in jobs.items():
             for frame in frames:
                 state = frame_state[frame]
@@ -280,12 +310,24 @@ def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
                     n_confirmed += 1
                     all_confirmed_hits.extend(frame_hits)
                     best_hit_score = max(h["dom_score"] for h in frame_hits)
+                    best_hit_evalue = min(h["i_evalue"] for h in frame_hits)
 
-                    if best_hit_score > state["best_per_family"][family]:
+                    state["confirmed_families"].add(family)
+
+                    # Early eject for THIS FAMILY: strong hit means no need
+                    # to explore graph neighbors within this family.
+                    # The frame continues searching other families.
+                    if best_hit_evalue <= eject_evalue:
+                        state["ejected_families"].add(family)
+                        # Exclude all neighbors in this family
+                        for neighbor, _ in graph.neighbors(model, k=50):
+                            if graph.family_of(neighbor) == family:
+                                state["excluded"].add(neighbor)
+                        n_ejected += 1
+                    elif best_hit_score > state["best_per_family"][family]:
                         # Score improved -> reset decline counter, expand graph
                         state["best_per_family"][family] = best_hit_score
                         state["declining_count"][family] = 0
-                        state["confirmed_families"].add(family)
 
                         for neighbor, _ in graph.neighbors(model, k=expand_k):
                             if (neighbor not in state["searched"]
@@ -297,7 +339,6 @@ def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
                         state["declining_count"][family] += 1
                         if state["declining_count"][family] >= DECLINE_LIMIT:
                             # Terminate this family's search path
-                            # Exclude remaining graph neighbors for this family
                             for neighbor, _ in graph.neighbors(model, k=50):
                                 if graph.family_of(neighbor) == family:
                                     state["excluded"].add(neighbor)
@@ -329,17 +370,20 @@ def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
                          if s["status"] == "resolved")
         n_exhausted = sum(1 for s in frame_state.values()
                           if s["status"] == "exhausted")
+        n_ejected_total = sum(len(s["ejected_families"])
+                              for s in frame_state.values())
         n_models = len(jobs)
 
         log.info(f"    Round {round_num}: {n_models} models, "
                  f"{frames_this_round} frames, "
                  f"{len(round_hits)} hits, "
-                 f"{n_confirmed} confirmed in {t1 - t0:.1f}s "
-                 f"[active={n_active} resolved={n_resolved} "
-                 f"exhausted={n_exhausted}]")
+                 f"{n_confirmed} confirmed, {n_ejected} ejected "
+                 f"in {t1 - t0:.1f}s "
+                 f"[active={n_active} ejected={n_ejected_total} "
+                 f"resolved={n_resolved} exhausted={n_exhausted}]")
 
-    # Unresolved = frames with no candidates + any frame still active or
-    # exhausted (may have partial confirmations but not fully searched)
+    # Unresolved = frames with no candidates + active/exhausted frames.
+    # Resolved frames are done.
     unresolved = all_frame_names - frames_with_candidates
     for frame, state in frame_state.items():
         if state["status"] != "resolved":
@@ -354,7 +398,7 @@ def iterative_confirm(frame_candidates, graph, hmms_dict, seq_block,
 
 def iterative_search(hmm_path, seq_block, seq_fasta, alphabet,
                      n_workers=4, window_size=64, max_overlap_frac=0.33,
-                     max_rounds=5, expand_k=10):
+                     max_rounds=5, expand_k=10, checkpoint_dir=None):
     """Full iterative search: facets → confirm → legacy.
 
     Args:
@@ -384,8 +428,13 @@ def iterative_search(hmm_path, seq_block, seq_fasta, alphabet,
     log.info(f"  Graph: {graph}")
 
     # Step 1: Facet screen
+    ckpt = None
+    if checkpoint_dir:
+        db_base = os.path.basename(hmm_path)
+        ckpt = os.path.join(checkpoint_dir, f"{db_base}.facets.json")
     frame_candidates = facet_screen(
-        hmm_path, seq_block, window_size, max_overlap_frac)
+        hmm_path, seq_block, window_size, max_overlap_frac,
+        checkpoint_path=ckpt)
 
     # Step 2: Iterative confirmation
     log.info("  Iterative confirmation:")

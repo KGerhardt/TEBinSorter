@@ -162,3 +162,46 @@ Custom HMM databases can be passed as file paths in the `-d` argument.
 | `{prefix}.domains.tsv` | All domain occurrences with nucleotide coordinates |
 | `{prefix}.domains.faa` | Domain protein subsequences |
 | `{prefix}.BATHwater/` | Routed FASTA partitions (with `--emit-bath`) |
+
+## Under construction: facet classification
+
+An experimental faster search mode using **sub-HMM decomposition** ("facets") is in active development. Rather than searching every sequence against every full model, facets are small (64-position) spliced sub-HMMs built from the highest-scoring regions of each model. The approach:
+
+1. **Facet screen**: Search all facets against all frames in one pass. Facets are uniformly small, enabling perfect parallel load balancing.
+2. **Targeted verification**: For each frame, verify only the top-scoring facet per domain family with a single full-model nobias search. Typically ~70 unique models instead of 266.
+3. **Confidence tiers**: Unverified facet hits are reported with empirically-calibrated confidence levels based on facet score:
+
+| Facet score | Confidence | Empirical verification rate |
+|------------|------------|---------------------------|
+| >= 20 | confirmed | 100% |
+| 15-20 | probable | 99.9% |
+| 10-15 | candidate | 86.5% |
+| < 10 | excluded | unreliable |
+
+4. **Legacy fallback**: Frames with no facet signal get full nobias legacy search.
+
+### Preliminary results (10k frame sample, REXdb 266 models)
+
+| Metric | Value |
+|--------|-------|
+| Family-level recall vs legacy | 94.3% |
+| Exact best-model match vs legacy | 88.3% |
+| Facet screen time | 4.0s |
+| Verification time (70 models) | 1.7s |
+| Legacy fallback time | 1.4s |
+| **Total** | **~13s search time** |
+
+Recall by confidence tier:
+
+| Tier | Assignments | Exact model accuracy |
+|------|-------------|---------------------|
+| confirmed (>= 20) | 1,760 | 94.7% |
+| probable (15-20) | 207 | 85.5% |
+| candidate (10-15) | 191 | 67.0% |
+
+### Supporting modules
+
+- **`decompose_hmm.py`** — Standalone sub-HMM decomposition and splicing. Works with DNA and amino acid HMMs. Greedy window selection with configurable overlap, coverage bounds, and score thresholds.
+- **`model_graph.py`** — Cross-model similarity graph built from consensus-vs-consensus search. Persisted as SQLite alongside HMM files. Pre-built for all 5 databases.
+- **`facet_classify.py`** — Facet screen → targeted verification → legacy fallback pipeline.
+- **`iterative_search.py`** — Graph-guided iterative confirmation (alternative to facet classification, higher recall at higher cost).
