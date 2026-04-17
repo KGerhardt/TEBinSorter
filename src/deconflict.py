@@ -97,6 +97,49 @@ def best_per_family(hits):
     return sort_idx[first_idx]
 
 
+def filter_hits(hits, min_cov=20.0, max_evalue=1e-3, min_acc=0.5,
+                min_norm_score=0.1):
+    """Apply filter thresholds. Returns boolean index mask.
+
+    Args:
+        hits: dict from load_hits()
+        min_cov: minimum HMM coverage (%)
+        max_evalue: maximum i-evalue
+        min_acc: minimum posterior probability
+        min_norm_score: minimum dom_score / model_len
+    """
+    mask = (
+        (hits["hmm_cov"] >= min_cov) &
+        (hits["evalue"] <= max_evalue) &
+        (hits["acc"] >= min_acc) &
+        (hits["norm_score"] >= min_norm_score)
+    )
+    return mask
+
+
+def best_per_family_filtered(hits, **filter_kwargs):
+    """Best per (base_seq, family) after filtering.
+
+    Filter first, then pick best by score.
+    """
+    mask = filter_hits(hits, **filter_kwargs)
+    if not mask.any():
+        return np.array([], dtype=int)
+
+    # Apply filter
+    idx = np.where(mask)[0]
+
+    # Build keys from filtered subset
+    keys = np.char.add(
+        np.char.add(hits["base_seq"][idx], "|"),
+        hits["family"][idx],
+    )
+    scores = hits["score"][idx]
+    sort_order = np.argsort(-scores)
+    _, first = np.unique(keys[sort_order], return_index=True)
+    return idx[sort_order[first]]
+
+
 def best_per_frame(hits):
     """Find the single best-scoring hit per translated frame.
 

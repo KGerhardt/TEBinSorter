@@ -182,7 +182,7 @@ def run_database_legacy(db_path, seq_block, db_name, conn, registry=None):
     t3 = time.time()
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
-    store_legacy(conn, hits, db_name)
+    store_legacy(conn, hits, db_name, is_legacy=1)
 
     if registry:
         log.info(f"  Storing numeric hits")
@@ -360,7 +360,7 @@ def main():
                      f"{len(f_legacy)} legacy hits in {t_f1 - t_f0:.1f}s")
             # Store legacy fallback hits
             if f_legacy:
-                store_legacy(conn, f_legacy, name)
+                store_legacy(conn, f_legacy, name, is_legacy=1)
             # Export classifications
             cls_tsv = os.path.join(outdir, f"{prefix}.{name}.classifications.tsv")
             export_classifications_tsv(classifications, cls_tsv)

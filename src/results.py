@@ -32,7 +32,8 @@ _HIT_COLUMNS = """
     ali_to      INTEGER NOT NULL,
     env_from    INTEGER NOT NULL,
     env_to      INTEGER NOT NULL,
-    acc         REAL NOT NULL
+    acc         REAL NOT NULL,
+    is_legacy INTEGER NOT NULL DEFAULT 0
 """
 
 SCHEMA = f"""
@@ -71,10 +72,10 @@ _INSERT_COLS = (
     "evalue, score, bias, dom_num, dom_of, "
     "c_evalue, i_evalue, dom_score, dom_bias, "
     "hmm_from, hmm_to, ali_from, ali_to, "
-    "env_from, env_to, acc"
+    "env_from, env_to, acc, is_legacy"
 )
 
-_INSERT_PLACEHOLDERS = ", ".join(["?"] * 21)
+_INSERT_PLACEHOLDERS = ", ".join(["?"] * 22)
 
 
 def create_db(db_path):
@@ -100,7 +101,7 @@ def store_sequences(conn, nucl_lengths):
     conn.commit()
 
 
-def _hits_to_rows(hits, db_name):
+def _hits_to_rows(hits, db_name, is_legacy=0):
     """Convert hit dicts to insert-ready tuples."""
     rows = []
     for h in hits:
@@ -126,6 +127,7 @@ def _hits_to_rows(hits, db_name):
             h["env_from"],
             h["env_to"],
             h["acc"],
+            is_legacy,
         ))
     return rows
 
@@ -150,9 +152,9 @@ def store_pass2(conn, hits, db_name):
     conn.commit()
 
 
-def store_legacy(conn, hits, db_name):
-    """Store legacy single-pass search hits."""
-    rows = _hits_to_rows(hits, db_name)
+def store_legacy(conn, hits, db_name, is_legacy=0):
+    """Store legacy search hits. is_legacy=1 for facet legacy fallback."""
+    rows = _hits_to_rows(hits, db_name, is_legacy=is_legacy)
     conn.executemany(
         f"INSERT INTO legacy_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
         rows,
