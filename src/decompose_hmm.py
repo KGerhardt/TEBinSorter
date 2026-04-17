@@ -344,6 +344,67 @@ def build_sub_hmms_from_file(hmm_path, window_size=64, max_domains=None,
     return sub_hmms
 
 
+# Window tiers for AA models: try largest first, fall back to smaller
+AA_WINDOW_TIERS = [96, 64, 48, 32]
+
+
+def build_sub_hmms_tiered(hmm_path, max_overlap_frac=0.5,
+                          min_score_per_base=0.0,
+                          min_coverage=0.0, max_coverage=1.0):
+    """Decompose models using tiered window sizes.
+
+    For each model, tries windows from largest (96) to smallest (32).
+    Uses the largest window that produces facets whose total coverage
+    doesn't exceed the parent model length. Models shorter than 32
+    are returned whole.
+
+    Args:
+        hmm_path: path to HMM file
+        max_overlap_frac: overlap budget between windows
+        min_score_per_base: minimum avg score per position
+        min_coverage: minimum parent model coverage fraction
+        max_coverage: maximum parent model coverage fraction
+
+    Returns:
+        list of (sub_hmm, parent_name, start, end) tuples
+    """
+    sub_hmms = []
+
+    for hmm in _load_hmms(hmm_path):
+        name = hmm.name
+        M = hmm.M
+
+        # Too small to facet at all
+        if M < 32:
+            sub_hmms.append((hmm, name, 0, M))
+            continue
+
+        # Try each tier: largest window that's smaller than the model
+        best_domains = None
+
+        for window in AA_WINDOW_TIERS:
+            if window >= M:
+                continue
+
+            _, _, domains, _ = decompose_model(
+                hmm, window, None, min_score_per_base,
+                max_overlap_frac, min_coverage, max_coverage)
+
+            if domains:
+                best_domains = domains
+                break  # Largest valid tier wins
+
+        if best_domains is None:
+            # No tier fit -> return whole model
+            sub_hmms.append((hmm, name, 0, M))
+        else:
+            for start, end, score in best_domains:
+                sub = splice_sub_hmm(hmm, start, end)
+                sub_hmms.append((sub, name, start, end))
+
+    return sub_hmms
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
