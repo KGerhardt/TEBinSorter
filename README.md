@@ -97,7 +97,14 @@ The AnnoSINE database contains SINE_SO (M=4,176), an outlier model 6x larger tha
 | Rice (2,431 seqs) | 2,674 | 0 | 71% |
 | 133k sequences | 207,554 | 1 | 71% |
 
-SINE_SO accounts for 71% of AnnoSINE's total M² compute cost but produces effectively zero usable hits after standard filtering. TEBinSorter excludes it by default, reducing AnnoSINE search time from ~39s to ~10s on rice. Use `--include-sine-so` or `-d sine-so` to search it explicitly.
+SINE_SO accounts for 71% of AnnoSINE's total M² compute cost but produces effectively zero usable hits after standard filtering. TEBinSorter excludes it by default:
+
+| Dataset | With SINE_SO | Without | Speedup |
+|---------|-------------|---------|---------|
+| Rice (4 proc) | 39.4s | 10.4s | 3.8x |
+| 133k seqs (10 proc) | 38.5min | 10.9min | 3.5x |
+
+Use `--include-sine-so` or `-d sine-so` to search it explicitly.
 
 ## Installation
 
