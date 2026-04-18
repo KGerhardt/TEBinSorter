@@ -34,10 +34,10 @@ For amino acid databases, uses spliced sub-HMMs ("facets") for fast pre-screenin
 
 DNA databases (AnnoSINE) always use the default legacy search -- DNA facets do not provide sufficient sensitivity gains to justify the overhead.
 
-## Quick notes ##
+## Notes ##
 
-* All results reported by TEBinSorter ultimately emerge from identical HMM alignments to identical sequences with identical locations and hit probability metrics (e.g. E-values) using the same --nobias logic as the original; this completely guarantees that a hit found by TEBinSorter is bitwise identical to a hit found by TESorter.
-* In the facets mode, TEBinSorter is finding a relatively small subset of all TESorter hits that are extremely likely to be the single best hit per input sequence. In a sense, this means that the facets search finds less. However, after TESorter filters results, the filtering produces a subset of hits essentially identical (99.98%) to those found by TEBinSorter - TEBinSorter finds these hits directly instead of by post-processing from a completely exhaustive search and skips the cost of the exhaustive search on most sequences.
+* All results reported by TEBinSorter ultimately emerge from identical HMM alignments to identical sequences with identical locations and hit probability metrics (e.g. E-values) using the same --nobias logic as the original; this guarantees that a hit found by TEBinSorter is bitwise identical to a hit found by TESorter. In the default mode, all hits are always 100% identical.
+* In the facets mode, TEBinSorter is finding a relatively small subset of all TESorter hits that are extremely likely to be the single best hit per input sequence. This means that the facets search finds less and stops looking at a sequence very quickly. However, after TESorter filters results, the filtering produces a subset of hits essentially identical (99.98%) to those found by TEBinSorter - TEBinSorter finds these hits directly instead of by post-processing from a completely exhaustive search and skips the cost of the exhaustive search on most sequences.
 
 ## Benchmarks
 
@@ -176,7 +176,7 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 ### Core modules
 
 - **`pipeline.py`** — Main CLI and search orchestration
-- **`search.py`** — HMM search engine with IQR-balanced parallelism
+- **`search.py`** — HMM search engine with balanced parallelism
 - **`sequence.py`** — FASTA ingestion (pyfastx) and six-frame translation (pyhmmer)
 - **`hmm.py`** — HMM loading, alphabet detection, optimized profile construction
 - **`results.py`** — SQLite persistence with pre-parsed columns (base_seq, strand, frame, domain_type)
@@ -185,7 +185,7 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 ### Facet classification
 
 - **`decompose_hmm.py`** — Standalone sub-HMM decomposition and splicing. Tiered window sizes, configurable overlap. Works with DNA and amino acid HMMs.
-- **`model_graph.py`** — Cross-model similarity graph. Pre-built for all databases.
+- **`model_graph.py`** — Cross-HMM-model similarity graph. Pre-built for all databases. Contains a record of how similar each HMM record is to all the other records in the database.
 - **`facet_classify.py`** — Facet screen → verification → cross-family completion → legacy fallback
 - **`cross_family.py`** — Targeted search for missing domain families in classified frames
 
@@ -200,8 +200,22 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 
 The concept of an HMM facet is one I've been exploring for other projects but found a use for in this one. By utlizing pyhmmer, we can observe the emission probabilities of an HMM model in a friendly manner in Python. I use these emission probabilities to find conserved subregions of the HMM model which are highly influential in the decisionmaking process of HMMer to actually search a sequence. These high-influence regions are extracted to form a "facet," whose emission probabilities are cloned from the original's over the corresponding window. There are multiple advantages to this approach:
 
-* Short models tend towards specificity. A full-length model will make an effort to compile information about required search effort across an entire sequence, while short models confirm or reject a local region quickly.
-* Much of the information that the full-length model would glean about the appropriateness of a a search from a long view of a sequence is extremely highly correlated with what a good facet will report. A good facet hit almost ensures a good full-length model hit.
+* Short models tend towards specificity. A full-length model will make an effort to compile information about required search effort across an entire sequence, while short models confirm or reject a local region quickly. Facets encoding the same number of amino acids as their parent tend nonetheless to search the same sequence more quickly by parts than the original model.
+* Much of the information that the full-length model would glean about the appropriateness of a search from a long view of a sequence is extremely highly correlated with what a good facet will report. A good facet hit almost ensures a good full-length model hit.
 * Facets can be intelligently sized so that they exactly pack SIMD lanes (96, 64, 32 amino acids, get consumed mostly in 16-AA sized bites) in the HMMer internals. This reduces low-level CPU waste compared to less politely divisible sizes of sequence.
 
 Are they mathematically correct or statistically sound? I honestly have no idea. But they work.
+
+For completeness, the facet generation code is intentionally a separate module from the remainder of TEBinSorter. It can be used in other projects.
+
+## Parallel strategy
+
+### Legacy (default) search
+
+PyHMMer exposes hmmsearch behavior with two internal, C-level parallelization schemes. These are "queries", corresponding with a search parallelized over the HMM models where each thread picks up one HMM model and searches it against all input sequences, and a "targets" mode where one sequence is searched against each HMM model in parallel. Queries parallelism is inherently more efficient, unless there are only a few models. 
+
+HMM model runtimes scale approximately with their model length M^2. Longer models can therefore dominate runtime despite being only "one" model. AnnoSINE has exactly such a case - the SINE_SO HMM model has a length of ~4100 bp and accounts for ~71% of the total runtime of the SINE model set. When the "queries" parallel mode is used, what ends up happening is that all of the other HMMs in annosine finish rather quickly, and SINE_SO runs single-threaded for usually >10x longer than all the rest of the models took put together. Using the original HMMer, you can provide more threads to a single model - it alleviates the problem somewhat, but HMMer's own internal parallelism is not very efficient.
+
+TEBinSorter wrangles this problem by caclulating the expected runtime cost of each HMM model in a database in advance (cost=M^2), and grouping them into one bin of "close enough in size to run in 'queries' mode" and one bin of "large models that benefit from 'targets' mode. Small models are those whose M^2 is <= the 75th percentile + (2 x IQR) among model costs for that database. Large models are any others.
+
+This all effects low-overhead, near-perfect parallelism in the most efficient available modes.
