@@ -142,17 +142,14 @@ def parse_clade_gydb(model_name):
 # hmm2best: domain deconfliction
 # ---------------------------------------------------------------------------
 
-def hmm2best(hits, config):
+def hmm2best(hits, config, compat_rounding=False):
     """Select best domain hits per (base_seq, domain_type).
-
-    Replicates TEsorter's _hmm2best logic:
-    - Normalize score: dom_score / model_len, rounded to 2 decimal places
-    - Remap domain types per config
-    - For overlap_aware databases: only replace if same gene or overlapping
 
     Args:
         hits: dict from deconflict.load_hits()
         config: database config dict
+        compat_rounding: if True, round norm_score to 2 decimal places
+                         (replicates TEsorter rounding bug)
 
     Returns:
         numpy index array of selected hits
@@ -170,8 +167,10 @@ def hmm2best(hits, config):
         mask = domain_types == old
         domain_types[mask] = new
 
-    # Normalized score (TEsorter-compatible rounding)
-    norm_score = np.round(hits["score"] / hits["model_len"], 2)
+    # Normalized score
+    norm_score = hits["score"] / hits["model_len"]
+    if compat_rounding:
+        norm_score = np.round(norm_score, 2)
 
     # Group by (base_seq, domain_type)
     # Process in score-descending order within each group
@@ -226,17 +225,22 @@ def hmm2best(hits, config):
 
 
 def apply_filters(hits, indices, min_cov=20.0, max_evalue=1e-3,
-                  min_acc=0.5, min_norm_score=0.1):
-    """Apply TEsorter-compatible filters to selected hits."""
-    mask = np.ones(len(indices), dtype=bool)
-    for j, i in enumerate(indices):
-        cov = hits["hmm_cov"][i]
-        evalue = hits["evalue"][i]
-        acc = hits["acc"][i]
-        nscore = round(hits["score"][i] / hits["model_len"][i], 2)
-        if cov < min_cov or evalue > max_evalue or acc < min_acc or nscore < min_norm_score:
-            mask[j] = False
-    return indices[mask]
+                  min_acc=0.5, min_norm_score=0.1, compat_rounding=False):
+    """Apply filters to selected hits.
+
+    Uses full precision by default. --compat-tesorter-rounding rounds
+    norm_score to 2 decimal places before threshold comparison.
+    """
+    idx = np.array(indices)
+    cov = hits["hmm_cov"][idx]
+    evalue = hits["evalue"][idx]
+    acc = hits["acc"][idx]
+    nscore = hits["score"][idx] / hits["model_len"][idx]
+    if compat_rounding:
+        nscore = np.round(nscore, 2)
+
+    mask = (cov >= min_cov) & (evalue <= max_evalue) & (acc >= min_acc) & (nscore >= min_norm_score)
+    return idx[mask]
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +350,7 @@ def _classify_gydb(genes, clades, models, config):
 # Full classification pipeline
 # ---------------------------------------------------------------------------
 
-def classify_sequences(hits, config, gydb_clade_map=None):
+def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False):
     """Full classification: hmm2best -> filter -> classify per sequence.
 
     Args:
@@ -363,11 +367,11 @@ def classify_sequences(hits, config, gydb_clade_map=None):
         config["_clade_map"] = gydb_clade_map
 
     # Step 1: hmm2best
-    best_idx = hmm2best(hits, config)
+    best_idx = hmm2best(hits, config, compat_rounding=compat_rounding)
     log.info(f"  hmm2best: {len(best_idx)} domain assignments")
 
     # Step 2: filter
-    filtered_idx = apply_filters(hits, best_idx)
+    filtered_idx = apply_filters(hits, best_idx, compat_rounding=compat_rounding)
     log.info(f"  After filter: {len(filtered_idx)} assignments")
 
     # Step 3: group by base_seq and classify
