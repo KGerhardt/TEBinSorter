@@ -39,11 +39,25 @@ def load_hits(db_path, table="legacy_hits", database=None):
     """
     conn = sqlite3.connect(db_path)
 
-    query = f"""
-        SELECT target_name, query_name, dom_score, i_evalue, acc,
-               hmm_from, hmm_to, query_len, env_from, env_to
-        FROM {table}
-    """
+    # Check if new schema (has base_seq, domain_type columns)
+    cols_info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    col_names = {c[1] for c in cols_info}
+    has_new_schema = "base_seq" in col_names and "domain_type" in col_names
+
+    if has_new_schema:
+        query = f"""
+            SELECT target_name, query_name, dom_score, i_evalue, acc,
+                   hmm_from, hmm_to, query_len, env_from, env_to,
+                   base_seq, domain_type
+            FROM {table}
+        """
+    else:
+        query = f"""
+            SELECT target_name, query_name, dom_score, i_evalue, acc,
+                   hmm_from, hmm_to, query_len, env_from, env_to
+            FROM {table}
+        """
+
     params = ()
     if database:
         query += " WHERE database = ?"
@@ -67,8 +81,12 @@ def load_hits(db_path, table="legacy_hits", database=None):
     env_from = np.array([r[8] for r in rows], dtype=np.int32)
     env_to = np.array([r[9] for r in rows], dtype=np.int32)
 
-    base_seq = np.array([_get_base_seq(t) for t in target])
-    family = np.array([_get_family(m) for m in model])
+    if has_new_schema:
+        base_seq = np.array([r[10] for r in rows])
+        family = np.array([r[11] for r in rows])
+    else:
+        base_seq = np.array([_get_base_seq(t) for t in target])
+        family = np.array([_get_family(m) for m in model])
     hmm_cov = 100.0 * (hmm_to - hmm_from + 1) / model_len
     norm_score = score / model_len
 

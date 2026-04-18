@@ -14,8 +14,12 @@ _HIT_COLUMNS = """
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     database    TEXT NOT NULL,
     target_name TEXT NOT NULL,
+    base_seq    TEXT NOT NULL,
+    strand      TEXT NOT NULL,
+    frame       INTEGER NOT NULL,
     target_len  INTEGER NOT NULL,
     query_name  TEXT NOT NULL,
+    domain_type TEXT NOT NULL,
     query_len   INTEGER NOT NULL,
     evalue      REAL NOT NULL,
     score       REAL NOT NULL,
@@ -62,20 +66,24 @@ CREATE INDEX IF NOT EXISTS idx_p2_query ON pass2_hits(query_name);
 CREATE INDEX IF NOT EXISTS idx_p2_evalue ON pass2_hits(i_evalue);
 CREATE INDEX IF NOT EXISTS idx_p2_db ON pass2_hits(database);
 CREATE INDEX IF NOT EXISTS idx_leg_target ON legacy_hits(target_name);
+CREATE INDEX IF NOT EXISTS idx_leg_baseseq ON legacy_hits(base_seq);
 CREATE INDEX IF NOT EXISTS idx_leg_query ON legacy_hits(query_name);
+CREATE INDEX IF NOT EXISTS idx_leg_domain ON legacy_hits(domain_type);
 CREATE INDEX IF NOT EXISTS idx_leg_evalue ON legacy_hits(i_evalue);
 CREATE INDEX IF NOT EXISTS idx_leg_db ON legacy_hits(database);
+CREATE INDEX IF NOT EXISTS idx_leg_mode ON legacy_hits(search_mode);
 """
 
 _INSERT_COLS = (
-    "database, target_name, target_len, query_name, query_len, "
+    "database, target_name, base_seq, strand, frame, target_len, "
+    "query_name, domain_type, query_len, "
     "evalue, score, bias, dom_num, dom_of, "
     "c_evalue, i_evalue, dom_score, dom_bias, "
     "hmm_from, hmm_to, ali_from, ali_to, "
     "env_from, env_to, acc, search_mode"
 )
 
-_INSERT_PLACEHOLDERS = ", ".join(["?"] * 22)
+_INSERT_PLACEHOLDERS = ", ".join(["?"] * 26)
 
 
 def create_db(db_path):
@@ -101,15 +109,44 @@ def store_sequences(conn, nucl_lengths):
     conn.commit()
 
 
+def _parse_frame_info(target_name):
+    """Extract base_seq, strand, frame from target name."""
+    parts = target_name.rsplit("|", 1)
+    if len(parts) != 2:
+        return target_name, ".", 0
+
+    base_seq, suffix = parts
+    if suffix.startswith("fwd"):
+        return base_seq, "+", int(suffix[-1]) - 1
+    elif suffix.startswith("rev"):
+        return base_seq, "-", int(suffix[-1]) - 1
+    else:
+        return target_name, ".", 0
+
+
+def _parse_domain_type(query_name):
+    """Extract domain type from model name."""
+    if ":" in query_name:
+        return query_name.split(":")[1].split("-")[-1]
+    return query_name.split("_")[0]
+
+
 def _hits_to_rows(hits, db_name, search_mode=0):
     """Convert hit dicts to insert-ready tuples."""
     rows = []
     for h in hits:
+        base_seq, strand, frame = _parse_frame_info(h["target_name"])
+        domain_type = _parse_domain_type(h["query_name"])
+
         rows.append((
             db_name,
             h["target_name"],
+            base_seq,
+            strand,
+            frame,
             h["target_len"],
             h["query_name"],
+            domain_type,
             h["query_len"],
             h["evalue"],
             h["score"],
