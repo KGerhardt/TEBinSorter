@@ -1,12 +1,16 @@
 # TEBinSorter
 
-Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter) at >500x speed. Currently an incomplete replication of the original: this code stops at the end of the HMMsearch phase it seeks to accelerate.
+Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter) at greatly improved speed. Currently an incomplete replication of the original: this code stops at the end of the HMMsearch phase it seeks to accelerate.
 
 ## How it works
 
 TEsorter classifies transposable elements by searching translated sequences against HMM profile databases using HMMER's `hmmscan` with `--nobias`. This disables fast filtering for every sequence-model comparison, making the vast majority of runtime a waste: obvious non-hits are screened at full cost so that a handful of true positives aren't missed.
 
-TEBinSorter replaces this with in-process `hmmsearch` via [pyhmmer](https://pyhmmer.readthedocs.io/), IQR-balanced parallel workload scheduling, and an optional **facet classification** mode that uses spliced sub-HMMs for fast pre-screening.
+TEBinSorter achieves acceleration through substantial architectural changes to almost every portion of the code.
+
+* Rather than HMMscan, TEBinSorter utilizes `hmmsearch` via [pyhmmer](https://pyhmmer.readthedocs.io/), which is generally more performant. E-value differences between HMMscan and HMMsearch are eliminated by parameterization to ensure identical results, just faster.
+* TEBinSorter utilizes intelligent parallel workload balancing to optimize the efficiency of searches and ensure near-perfect CPU utilization
+* TEBinSorter implements an alternative, optional algorithm for more rapidly searching protein databases (most of what TESorter uses) by pre-screening TEs to identify probable best hits before expensive searches are performed.
 
 Results are stored in a SQLite database, enabling post-hoc filtering and analysis without re-running searches.
 
@@ -17,24 +21,29 @@ Results are stored in a SQLite database, enabling post-hoc filtering and analysi
 Single-pass nobias `hmmsearch` against all models. Produces identical results to TEsorter but dramatically faster via:
 - `hmmsearch` instead of `hmmscan` (no per-sequence database reload)
 - In-process pyhmmer instead of subprocess calls
-- IQR-based parallel strategy: models with outlier M² cost use `parallel='targets'`, the rest use `parallel='queries'`, avoiding thread starvation from large models
+- HMM model cost-aware parallel load balancing to prevent idle CPU time
 
 ### Facet mode (`--facet`)
 
 For amino acid databases, uses spliced sub-HMMs ("facets") for fast pre-screening:
 
-1. **Facet screen**: Tiered sub-HMMs (96→64→48→32 positions) searched against all frames. Uniformly sized, perfect parallel load balance.
+1. **Facet screen**: Tiered sub-HMMs (96→64→48→32 amino acids) searched against all six translated protein reading frames of each input TE. Uniformly sized, perfect parallel load balance is intrinsic.
 2. **Targeted verification**: Top facet hit per domain family verified with single full-model nobias search.
 3. **Cross-family completion**: Classified frames searched for missing domain families.
-4. **Legacy fallback**: Unclassified frames (no facet signal) get full nobias search.
+4. **Legacy fallback**: Unclassified frames (no facet signal) optionally get full nobias search.
 
 DNA databases (AnnoSINE) always use the default legacy search -- DNA facets do not provide sufficient sensitivity gains to justify the overhead.
+
+## Quick notes ##
+
+* All results reported by TEBinSorter ultimately emerge from identical HMM alignments to identical sequences with identical locations and hit probability metrics (e.g. E-values) using the same --nobias logic as the original; this completely guarantees that a hit found by TEBinSorter is bitwise identical to a hit found by TESorter.
+* In the facets mode, TEBinSorter is finding a relatively small subset of all TESorter hits that are extremely likely to be the single best hit per input sequence. In a sense, this means that the facets search finds less. However, after TESorter filters results, the filtering produces a subset of hits essentially identical (99.98%) to those found by TEBinSorter - TEBinSorter finds these hits directly instead of by post-processing from a completely exhaustive search and skips the cost of the exhaustive search on most sequences.
 
 ## Benchmarks
 
 Rice TE library (2,431 sequences), 4 processors.
 
-**Important caveat:** TEsorter baseline times were measured on WSL2 (Windows Subsystem for Linux), which has known I/O and process-spawning overhead compared to native Linux. TEsorter's architecture (many subprocess calls to hmmscan, heavy temp file I/O) is disproportionately affected by this. The true speedup on native Linux may be smaller. TEBinSorter times are also WSL2 but its architecture (in-process pyhmmer, minimal disk I/O) is less sensitive to this penalty.
+**Important caveat:** TEsorter baseline times were measured on WSL2 (Windows Subsystem for Linux), which has known I/O and process-spawning overhead compared to native Linux. TEsorter's architecture (many subprocess calls to hmmscan, heavy temp file I/O) is disproportionately affected by this. The true speedup on native Linux may be smaller. TEBinSorter times are also WSL2 but its architecture (in-process pyhmmer, minimal disk I/O) is less sensitive to this penalty. I'm going to measure a true comparsion a bit later - the numbers will not be nearly as impressive as they appear here, unless you too are running the program on WSL.
 
 ### Default mode
 
@@ -68,16 +77,16 @@ Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results
 | Database | TEsorter pairs | TEBinSorter pairs | Common | TEsorter only | Notes |
 |----------|---------------|-------------------|--------|---------------|-------|
 | TIR | 430 | 430 | 430 | 0 | Perfect match |
-| LINE | 806 | 778 | 778 | 28 | TEsorter rounding artifact |
+| LINE | 806 | 778 | 778 | 28 | All rounding artifacts |
 | REXdb | 2,787 | 2,784 | 2,767 | 20 | 17 rounding, 3 bias filter |
 | GyDB | 7,496 | 7,448 | 7,448 | 48 | All rounding artifacts |
 | SINE | 0 (TEsorter bug) | 731 | -- | -- | TEsorter forces `seq_type='prot'` for a DNA database |
 
-**Alignment coordinates:** Identical to TEsorter's GFF3 output (verified 430/430 on TIR).
+**Alignment coordinates:** Identical to TEsorter's GFF3 output
 
 **E-values:** Identical (Z set to match hmmscan convention).
 
-**TEsorter rounding bug:** TEsorter rounds `domain_score / model_length` to 2 decimal places before threshold comparison. TEBinSorter uses full precision by default. `--compat-tesorter-rounding` replicates the old behavior.
+**TEsorter rounding bug:** TEsorter rounds `domain_score / model_length` to 2 decimal places before threshold comparison. This results in cases where 9.9 rounds -> 10 and therefore passes a TESorter filter it never should have. TEBinSorter uses full precision by default. `--compat-tesorter-rounding` replicates the old rounding behavior.
 
 ## Installation
 
@@ -127,7 +136,7 @@ python3 src/pipeline.py input.fasta -d rexdb --facet -p 4 -o output_dir
 
 DNA databases automatically fall back to default mode when `--facet` is specified.
 
-### Emit partitions for BATH aligner
+### Emit partitions for BATH aligner - currently in need of revision.
 
 ```bash
 python3 src/pipeline.py input.fasta -d rexdb --emit-bath -o output_dir
@@ -184,3 +193,15 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 
 - **`emit.py`** — BATH aligner partition emission (standalone or pipeline-integrated)
 - **`id_registry.py`** — Deterministic integer ID registry for fast numeric storage
+
+# Extended methods
+
+## HMM facets
+
+The concept of an HMM facet is one I've been exploring for other projects but found a use for in this one. By utlizing pyhmmer, we can observe the emission probabilities of an HMM model in a friendly manner in Python. I use these emission probabilities to find conserved subregions of the HMM model which are highly influential in the decisionmaking process of HMMer to actually search a sequence. There are multiple advantages to this approach:
+
+* Short models tend towards specificity. A full-length model will make an effort to compile information about required search effort across an entire sequence, while short models confirm or reject a local region quickly.
+* Much of the information that the full-length model would glean about the appropriateness of a a search from a long view of a sequence is extremely highly correlated with what a good facet will report. A good facet hit almost ensures a good full-length model hit.
+* Facets can be intelligently sized so that they exactly pack SIMD lanes (96, 64, 32 amino acids, get consumed mostly in 16-AA sized bites) in the HMMer internals. This reduces low-level CPU waste compared to less politely divisible sizes of sequence.
+
+Are they mathematically correct or statistically sound? I honestly have no idea. But they work.
