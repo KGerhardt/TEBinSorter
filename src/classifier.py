@@ -12,6 +12,7 @@ Two stages:
 """
 
 import logging
+import os
 import numpy as np
 from collections import Counter, defaultdict
 
@@ -85,6 +86,90 @@ DB_CONFIGS = {
     "sine": SINE_CONFIG,
     "sine-so": SINE_CONFIG,
 }
+
+# GyDB clade map: loaded from GyDB2.hmm.info
+_GYDB_INFO_PATH = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), "..", "database", "GyDB2.hmm.info")
+
+
+def load_gydb_clade_map(info_path=None):
+    """Load GyDB clade -> (order, superfamily) map from .info file.
+
+    Replicates TEsorter's CladeInfo parser.
+    """
+    if info_path is None:
+        info_path = _GYDB_INFO_PATH
+
+    if not os.path.exists(info_path):
+        log.warning(f"GyDB info file not found: {info_path}")
+        return {}
+
+    clade_aliases = {
+        'Ty_(Pseudovirus)': 'pseudovirus',
+        'Cer2-3': 'cer2-3',
+        '412/Mdg1': '412_mdg1',
+        'TF1-2': 'TF',
+        'Micropia/Mdg3': 'micropia_mdg3',
+        'CoDi-I': 'codi_I',
+        'CoDi-II': 'codi_II',
+        '17.6': '17_6',
+    }
+
+    clade_map = {}
+    header = None
+
+    for line in open(info_path):
+        parts = line.strip().split('\t')
+        if header is None:
+            header = parts
+            continue
+
+        d = dict(zip(header, parts))
+        clade = d.get('Clade', 'NA')
+        if clade == 'NA':
+            clade = d.get('Cluster_or_genus', '')
+
+        superfamily = d.get('Family', '').split('/')[-1]
+        if superfamily == 'Retroviridae':
+            clade = d.get('Cluster_or_genus', '').replace('virus', 'viridae')
+        if superfamily == 'Retrovirus':
+            superfamily = 'Retroviridae'
+
+        system = d.get('System', '')
+        order = 'LTR' if system in {'LTR_retroelements', 'LTR_Retroelements',
+                                      'LTR_retroid_elements'} else system
+
+        # Register clade and all its aliases
+        clade_map[clade] = (order, superfamily)
+        if clade in clade_aliases:
+            alias = clade_aliases[clade]
+            clade_map[alias] = (order, superfamily)
+            if alias == '412_mdg1':
+                clade_map['412-mdg1'] = (order, superfamily)
+
+        # Also register with underscores and lowercase
+        clade_map[clade.replace('-', '_')] = (order, superfamily)
+        clade_map[clade.lower()] = (order, superfamily)
+        clade_map[clade.replace('-', '_').lower()] = (order, superfamily)
+
+    # Special entries
+    clade_map['ty1/copia'] = ('LTR', 'Copia')
+
+    # Unknown clades
+    for clade, order in {
+        'retroelement': 'LTR', 'retroviridae': 'LTR',
+        'B-type_betaretroviridae': 'LTR', 'D-type_betaretroviridae': 'LTR',
+        'caulimoviruses': 'LTR', 'caulimoviridae_dom2': 'LTR',
+        'errantiviridae': 'LTR', 'retropepsins': 'LTR',
+        'VPX_retroviridae': 'LTR', 'cog5550': 'Unknown',
+        'ddi': 'Unknown', 'dtg_ilg_template': 'Unknown',
+        'saspase': 'Unknown', 'GIN1': 'Unknown',
+        'shadow': 'Unknown', 'all': 'Unknown',
+        'pepsins_A1a': 'Unknown', 'pepsins_A1b': 'Unknown',
+    }.items():
+        clade_map[clade] = (order, 'unknown')
+
+    return clade_map
 
 
 # ---------------------------------------------------------------------------
@@ -362,9 +447,12 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False)
         list of dicts with keys: id, order, superfamily, clade, complete,
         strand, domains
     """
-    if gydb_clade_map and config["clade_parser"] == "gydb":
+    if config["clade_parser"] == "gydb":
         config = dict(config)
-        config["_clade_map"] = gydb_clade_map
+        if gydb_clade_map:
+            config["_clade_map"] = gydb_clade_map
+        else:
+            config["_clade_map"] = load_gydb_clade_map()
 
     # Step 1: hmm2best
     best_idx = hmm2best(hits, config, compat_rounding=compat_rounding)

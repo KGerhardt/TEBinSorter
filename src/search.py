@@ -1,13 +1,12 @@
 """
-Two-pass HMM search engine.
+HMM search engine with IQR-balanced parallelism.
 
-Pass 1: fast coarse screen with default HMMER filtering (bias filter on)
-         and maximally permissive E-value thresholds. Stores everything
-         that survives the bias filter -- no E-value filtering at this stage.
-Pass 2: sensitive search with bias_filter=False against only the plausible
-         model subset per sequence. Work is distributed across workers using
-         M^2-aware cost scheduling. Z is set to match hmmscan's convention
-         (Z = number of models) for E-value comparability.
+Core search function: legacy_search() runs nobias hmmsearch against all
+models with IQR-based parallel strategy selection (normal models use
+parallel='queries', M^2 outliers use parallel='targets').
+
+Also contains pass1_screen and pass2_search for the deprecated two-pass
+mode, retained for potential future use.
 
 Results are captured via TopHits.write() to BytesIO and parsed from
 the standard HMMER domain table text format.

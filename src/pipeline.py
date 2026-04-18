@@ -1,8 +1,8 @@
 """
-Main pipeline for TE classification via two-pass HMM search.
+Main pipeline for TE classification.
 
 Orchestrates: FASTA ingestion -> alphabet detection -> optional translation
--> pass 1 (coarse) -> optional pass 2 (sensitive) -> SQLite results.
+-> HMM search -> classification -> BLAST pass-2 -> SQLite + TSV output.
 """
 
 import argparse
@@ -11,24 +11,14 @@ import os
 import time
 
 from hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
-from search import (build_sequence_block, pass1_screen, pass2_search,
-                    pass2_search_parallel, legacy_search)
+from search import build_sequence_block, legacy_search
 from sequence import translate_fasta, open_input
-from results import (create_db, store_sequences, store_pass1, store_pass2,
-                     store_legacy, export_tsv, export_best_hits_tsv,
-                     export_all_domains_tsv, export_domain_sequences)
-from emit import emit_partitions
-from quick import quick_search
-from iterative_search import iterative_search
+from results import create_db, store_sequences, store_legacy
 from facet_classify import facet_classify, export_classifications_tsv
 from cross_family import find_missing_families, search_missing
-from id_registry import IDRegistry
 from classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, DB_CONFIGS)
 from blast_pass2 import blast_pass2
-from deconflict import (store_hits_numeric, load_hits_fast,
-                        best_per_family_numeric, best_per_frame_numeric,
-                        NUMERIC_HITS_SCHEMA)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -148,7 +138,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_database_legacy(db_path, seq_block, db_name, conn, registry=None):
+def run_database_legacy(db_path, seq_block, db_name, conn):
     """
     Legacy mode: single-pass nobias search, all sequences against all models.
     """
@@ -158,9 +148,6 @@ def run_database_legacy(db_path, seq_block, db_name, conn, registry=None):
     t1 = time.time()
     log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
 
-    if registry:
-        registry.register_models(hmms)
-
     log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
     t2 = time.time()
     hits = legacy_search(hmms, seq_block)
@@ -168,14 +155,6 @@ def run_database_legacy(db_path, seq_block, db_name, conn, registry=None):
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
     store_legacy(conn, hits, db_name, search_mode=2)
-
-    if registry:
-        log.info(f"  Storing numeric hits")
-        t4 = time.time()
-        store_hits_numeric(conn, hits, registry)
-        t5 = time.time()
-        log.info(f"  Numeric storage in {t5 - t4:.1f}s")
-
     return len(hits)
 
 
@@ -285,10 +264,8 @@ def main():
             any_nucl = True
         log.info(f"  {name}: {alphabet}, translate={'yes' if alphabet == AMINO_ALPHABET else 'no'}")
 
-    # Create results database and ID registry
+    # Create results database
     conn = create_db(db_path_out)
-    conn.executescript(NUMERIC_HITS_SCHEMA)
-    registry = IDRegistry(conn)
 
     # Read input and store sequence metadata
     t_start = time.time()
@@ -372,40 +349,9 @@ def main():
             log.info(f"  Classifications: {cls_tsv}")
         elif args.facet and alphabet == DNA_ALPHABET:
             log.info(f"  DNA database: using legacy search (facets AA-only)")
-            run_database_legacy(path, seq_block, name, conn, registry=registry)
-        elif args.iterative:
-            t_i0 = time.time()
-            i_hits = iterative_search(
-                path, seq_block, seq_fasta, alphabet,
-                n_workers=args.processors,
-                checkpoint_dir=outdir)
-            t_i1 = time.time()
-            log.info(f"  Iterative mode: {len(i_hits)} hits in {t_i1 - t_i0:.1f}s")
-            store_legacy(conn, i_hits, name)
-            if registry:
-                store_hits_numeric(conn, i_hits, registry)
-        elif args.quick:
-            t_q0 = time.time()
-            q_hits = quick_search(path, seq_block, seq_fasta, alphabet)
-            t_q1 = time.time()
-            log.info(f"  Quick mode: {len(q_hits)} hits in {t_q1 - t_q0:.1f}s")
-            store_legacy(conn, q_hits, name)
-        elif not two_pass:
-            run_database_legacy(path, seq_block, name, conn, registry=registry)
+            run_database_legacy(path, seq_block, name, conn)
         else:
-            skip_pass2 = args.pass_1_only or args.emit_bath
-            p1, p2 = run_database(
-                path, seq_block, seq_fasta, name, alphabet, conn,
-                pass1_only=skip_pass2,
-                n_workers=args.processors,
-                F1=args.F1,
-            )
-
-            if args.emit_bath:
-                bath_dir = os.path.join(outdir, "BATHwater")
-                log.info(f"  Emitting BATH partitions to {bath_dir}/")
-                emit_partitions(conn, seq_fasta, path, bath_dir,
-                                n_workers=args.processors, db_name=name)
+            run_database_legacy(path, seq_block, name, conn)
 
     # --- Classification ---
     log.info("--- Classification ---")

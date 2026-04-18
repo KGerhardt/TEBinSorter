@@ -46,25 +46,10 @@ CREATE TABLE IF NOT EXISTS sequences (
     length      INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS pass1_hits (
-    {_HIT_COLUMNS}
-);
-
-CREATE TABLE IF NOT EXISTS pass2_hits (
-    {_HIT_COLUMNS}
-);
-
 CREATE TABLE IF NOT EXISTS legacy_hits (
     {_HIT_COLUMNS}
 );
 
-CREATE INDEX IF NOT EXISTS idx_p1_target ON pass1_hits(target_name);
-CREATE INDEX IF NOT EXISTS idx_p1_query ON pass1_hits(query_name);
-CREATE INDEX IF NOT EXISTS idx_p1_db ON pass1_hits(database);
-CREATE INDEX IF NOT EXISTS idx_p2_target ON pass2_hits(target_name);
-CREATE INDEX IF NOT EXISTS idx_p2_query ON pass2_hits(query_name);
-CREATE INDEX IF NOT EXISTS idx_p2_evalue ON pass2_hits(i_evalue);
-CREATE INDEX IF NOT EXISTS idx_p2_db ON pass2_hits(database);
 CREATE INDEX IF NOT EXISTS idx_leg_target ON legacy_hits(target_name);
 CREATE INDEX IF NOT EXISTS idx_leg_baseseq ON legacy_hits(base_seq);
 CREATE INDEX IF NOT EXISTS idx_leg_query ON legacy_hits(query_name);
@@ -167,26 +152,6 @@ def _hits_to_rows(hits, db_name, search_mode=0):
             search_mode,
         ))
     return rows
-
-
-def store_pass1(conn, hits, db_name):
-    """Store pass-1 coarse screen hits."""
-    rows = _hits_to_rows(hits, db_name)
-    conn.executemany(
-        f"INSERT INTO pass1_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
-        rows,
-    )
-    conn.commit()
-
-
-def store_pass2(conn, hits, db_name):
-    """Store pass-2 sensitive search hits."""
-    rows = _hits_to_rows(hits, db_name)
-    conn.executemany(
-        f"INSERT INTO pass2_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
-        rows,
-    )
-    conn.commit()
 
 
 def store_legacy(conn, hits, db_name, search_mode=0):
