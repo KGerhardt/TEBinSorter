@@ -82,6 +82,8 @@ Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results
 | GyDB | 7,496 | 7,496 | 7,496 | 0 | Perfect match |
 | SINE | 0 (TEsorter bug) | 731 | -- | -- | TEsorter forces `seq_type='prot'` for a DNA database |
 
+**Full pipeline (HMM + classifier + BLAST pass-2):** 572/584 exact classification match (97.9%) on rice REXdb. 10 diffs from principled score-ordered deconfliction (TEsorter uses arbitrary file-order iteration, which can cause a weaker hit to hold a domain slot against a stronger competitor). 2 misses: borderline sequences whose BLAST pass-2 classification depends on slight differences in the classified target pool.
+
 **Alignment coordinates:** Identical to TEsorter's GFF3 output
 
 **E-values:** Identical (Z set to match hmmscan convention).
