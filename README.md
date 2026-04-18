@@ -1,6 +1,6 @@
 # TEBinSorter
 
-Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter) at greatly improved speed. Currently an incomplete replication of the original: this code stops at the end of the HMMsearch phase it seeks to accelerate.
+Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter) at greatly improved speed. Most differences in replication are the result of small bugfixes in TEBinSorter.
 
 ## How it works
 
@@ -12,7 +12,7 @@ TEBinSorter achieves acceleration through substantial architectural changes to a
 * TEBinSorter utilizes intelligent parallel workload balancing to optimize the efficiency of searches and ensure near-perfect CPU utilization
 * TEBinSorter implements an alternative, optional algorithm for more rapidly searching protein databases (most of what TESorter uses) by pre-screening TEs to identify probable best hits before expensive searches are performed.
 
-Results are stored in a SQLite database, enabling post-hoc filtering and analysis without re-running searches.
+Results are stored in a SQLite database, enabling post-hoc filtering and analysis without re-running searches. Run once, filter results at will.
 
 ## Search modes
 
@@ -115,7 +115,7 @@ Use `--include-sine-so` or `-d sine-so` to search it explicitly.
 - Python >= 3.10
 - [pyhmmer](https://pyhmmer.readthedocs.io/) >= 0.10
 - [pyfastx](https://github.com/lmdu/pyfastx) >= 2.0
-- numpy
+- numpy >= 2.0
 
 ```bash
 pip install pyhmmer pyfastx numpy
@@ -156,18 +156,6 @@ python3 src/pipeline.py input.fasta -d rexdb --facet -p 4 -o output_dir
 
 DNA databases automatically fall back to default mode when `--facet` is specified.
 
-### Emit partitions for BATH aligner - currently in need of revision.
-
-```bash
-python3 src/pipeline.py input.fasta -d rexdb --emit-bath -o output_dir
-# Partitions written to output_dir/BATHwater/
-```
-
-Or standalone from an existing results database:
-```bash
-python3 src/emit.py results.db sequences.aa database.hmm -o output_dir/BATHwater
-```
-
 ## Databases
 
 TEBinSorter auto-detects database alphabet (amino acid or DNA) from the HMM file. Built-in aliases:
@@ -189,7 +177,6 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 | `{prefix}.db` | SQLite database with all results |
 | `{prefix}.aa` | Six-frame translated amino acid sequences (indexed) |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (facet mode) |
-| `BATHwater/` | Routed FASTA partitions (with `--emit-bath`) |
 
 ## Architecture
 
@@ -211,7 +198,6 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 
 ### Utilities
 
-- **`emit.py`** — BATH aligner partition emission (standalone or pipeline-integrated)
 - **`id_registry.py`** — Deterministic integer ID registry for fast numeric storage
 
 # Extended methods
