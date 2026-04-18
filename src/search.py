@@ -155,6 +155,17 @@ def legacy_search(hmms, seq_block):
     Z is set to len(hmms) so E-values match hmmscan convention.
     """
     Z = len(hmms)
+
+    # Single model: always use parallel=targets
+    if len(hmms) == 1:
+        log.info(f"    1 model (parallel=targets)")
+        return _collect_hits(pyhmmer.hmmsearch(
+            hmms, seq_block,
+            bias_filter=False,
+            Z=Z, domZ=Z, E=1e10, domE=1e10,
+            parallel="targets",
+        ))
+
     normal, outliers = _partition_hmms_by_size(hmms)
 
     all_hits = []

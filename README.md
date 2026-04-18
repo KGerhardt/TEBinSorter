@@ -51,11 +51,11 @@ Rice TE library (2,431 sequences), 4 processors.
 |----------|--------|----------|-------------|---------|
 | TIR | 17 | 26m 41s | 1.0s | ~1,601x |
 | LINE | 28 | 56m 45s | 1.8s | ~1,892x |
-| SINE | 88 | ~30m | 39.4s | ~46x |
+| SINE | 87 (excl. SINE_SO) | ~30m | 10.4s | ~173x |
 | REXdb | 266 | >2h | 18.9s | >381x |
 | GyDB | 314 | >2h | 18.7s | >385x |
 
-All 5 databases searched in **80 seconds** total search time, **96 seconds** wall clock (4 processors).
+All 5 databases searched in **51 seconds** total search time, **67 seconds** wall clock (4 processors). SINE_SO excluded by default.
 
 ### Facet mode (amino acid databases)
 
@@ -87,6 +87,17 @@ Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results
 **E-values:** Identical (Z set to match hmmscan convention).
 
 **TEsorter rounding bug:** TEsorter rounds `domain_score / model_length` to 2 decimal places before threshold comparison. This results in cases where 9.9 rounds -> 10 and therefore passes a TESorter filter it never should have. TEBinSorter uses full precision by default. `--compat-tesorter-rounding` replicates the old rounding behavior.
+
+### SINE_SO: excluded by default
+
+The AnnoSINE database contains SINE_SO (M=4,176), an outlier model 6x larger than the next largest SINE model. Analysis of its contribution:
+
+| Dataset | SINE_SO raw hits | Survive TEsorter filters | % of AnnoSINE compute |
+|---------|-----------------|------------------------|----------------------|
+| Rice (2,431 seqs) | 2,674 | 0 | 71% |
+| 133k sequences | 207,554 | 1 | 71% |
+
+SINE_SO accounts for 71% of AnnoSINE's total M² compute cost but produces effectively zero usable hits after standard filtering. TEBinSorter excludes it by default, reducing AnnoSINE search time from ~39s to ~10s on rice. Use `--include-sine-so` or `-d sine-so` to search it explicitly.
 
 ## Installation
 

@@ -44,7 +44,8 @@ DB_ALIASES = {
     "gydb":     "GyDB2.hmm",
     "line":     "Kapitonov_et_al.GENE.LINE.hmm",
     "tir":      "Yuan_and_Wessler.PNAS.TIR.hmm",
-    "sine":     "AnnoSINE.hmm",
+    "sine":     "AnnoSINE_core.hmm",
+    "sine-so":  "SINE_SO.hmm",
 }
 
 
@@ -152,6 +153,14 @@ def parse_args():
         help="After pass 1, emit routed FASTA partitions for the BATH "
              "aligner instead of running pass 2. Output goes to "
              "{prefix}.BATHwater/ directory.",
+    )
+    parser.add_argument(
+        "--include-sine-so",
+        action="store_true",
+        default=False,
+        help="Include the SINE_SO model (M=4176) in AnnoSINE searches. "
+             "Excluded by default: SINE_SO costs 71%% of AnnoSINE's compute "
+             "but produces <1 filterable hit per 100k sequences.",
     )
     parser.add_argument(
         "--compat-tesorter-rounding",
@@ -273,7 +282,9 @@ def main():
 
     # Resolve databases
     if args.max_search:
-        db_names = list(DB_ALIASES.keys())
+        db_names = [k for k in DB_ALIASES.keys() if k != "sine-so"]
+        if args.include_sine_so:
+            db_names.append("sine-so")
     else:
         db_names = [s.strip() for s in args.database.split(",")]
 
