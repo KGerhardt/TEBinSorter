@@ -218,4 +218,4 @@ HMM model runtimes scale approximately with their model length M^2. Longer model
 
 TEBinSorter wrangles this problem by caclulating the expected runtime cost of each HMM model in a database in advance (cost=M^2), and grouping them into one bin of "close enough in size to run in 'queries' mode" and one bin of "large models that benefit from 'targets' mode. Small models are those whose M^2 is <= the 75th percentile + (2 x IQR) among model costs for that database. Large models are any others.
 
-This all effects low-overhead, near-perfect parallelism in the most efficient available modes.
+This all effects low-overhead, near-perfect parallelism in the most efficient available modes. Sequences are reused from the same in-memory object for both searches, so there is essentially no cost to this process.
