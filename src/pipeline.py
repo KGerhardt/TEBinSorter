@@ -21,6 +21,7 @@ from emit import emit_partitions
 from quick import quick_search
 from iterative_search import iterative_search
 from facet_classify import facet_classify, export_classifications_tsv
+from cross_family import find_missing_families, search_missing
 from id_registry import IDRegistry
 from deconflict import (store_hits_numeric, load_hits_fast,
                         best_per_family_numeric, best_per_frame_numeric,
@@ -182,7 +183,7 @@ def run_database_legacy(db_path, seq_block, db_name, conn, registry=None):
     t3 = time.time()
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
-    store_legacy(conn, hits, db_name, is_legacy=1)
+    store_legacy(conn, hits, db_name, search_mode=2)
 
     if registry:
         log.info(f"  Storing numeric hits")
@@ -359,11 +360,26 @@ def main():
             log.info(f"  Facet mode: {n_primary} assignments, "
                      f"{len(f_verified)} verified, "
                      f"{len(f_legacy)} legacy hits in {t_f1 - t_f0:.1f}s")
-            # Store verified hits (is_legacy=0) and fallback (is_legacy=1)
+            # Store: 0=facet verified, 1=cross-family, 2=legacy fallback
             if f_verified:
-                store_legacy(conn, f_verified, name, is_legacy=0)
+                store_legacy(conn, f_verified, name, search_mode=0)
+
+            # Cross-family check: search missing families for classified frames
+            from hmm import load_hmms as _load
+            _hmms = _load(path)
+            _hmms_dict = {h.name: h for h in _hmms}
+            missing, _ = find_missing_families(classifications, _hmms_dict)
+            if missing:
+                log.info(f"  Cross-family check: {len(missing)} frames")
+                cf_hits = search_missing(
+                    missing, _hmms_dict, seq_block, alphabet)
+                if cf_hits:
+                    store_legacy(conn, cf_hits, name, search_mode=1)
+                    log.info(f"    {len(cf_hits)} cross-family hits stored")
+
+            # Legacy fallback
             if f_legacy:
-                store_legacy(conn, f_legacy, name, is_legacy=1)
+                store_legacy(conn, f_legacy, name, search_mode=2)
             # Export classifications
             cls_tsv = os.path.join(outdir, f"{prefix}.{name}.classifications.tsv")
             export_classifications_tsv(classifications, cls_tsv)
