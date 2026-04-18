@@ -272,11 +272,8 @@ def splice_sub_hmm(src_hmm, start, end):
 
 def _load_hmms(hmm_path):
     """Load all HMMs from a file. Standalone version with no dependencies."""
-    hmms = []
-    with plan7.HMMFile(hmm_path) as hf:
-        for hmm in hf:
-            hmms.append(hmm)
-    return hmms
+    with open(hmm_path, "rb") as fh:
+        return list(plan7.HMMFile(io.BytesIO(fh.read())))
 
 
 def decompose_file(hmm_path, window_size=64, max_domains=None,
