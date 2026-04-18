@@ -77,9 +77,9 @@ Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results
 | Database | TEsorter pairs | TEBinSorter pairs | Common | TEsorter only | Notes |
 |----------|---------------|-------------------|--------|---------------|-------|
 | TIR | 430 | 430 | 430 | 0 | Perfect match |
-| LINE | 806 | 778 | 778 | 28 | All rounding artifacts |
-| REXdb | 2,787 | 2,784 | 2,767 | 20 | 17 rounding, 3 bias filter |
-| GyDB | 7,496 | 7,448 | 7,448 | 48 | All rounding artifacts |
+| LINE | 806 | 806 | 806 | 0 | Perfect match |
+| REXdb | 2,787 | 2,787 | 2,787 | 0 | Perfect match |
+| GyDB | 7,496 | 7,496 | 7,496 | 0 | Perfect match |
 | SINE | 0 (TEsorter bug) | 731 | -- | -- | TEsorter forces `seq_type='prot'` for a DNA database |
 
 **Alignment coordinates:** Identical to TEsorter's GFF3 output
