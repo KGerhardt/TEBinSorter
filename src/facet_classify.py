@@ -186,7 +186,8 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
     log.info(f"  Verifying against {len(model_frames)} unique models")
     t0 = time.time()
 
-    verified_results = {}  # (frame, model) -> full_score
+    verified_hits_list = []  # all domain hits from verification
+    verified_frames = set()  # frames that got at least one hit
 
     # Batch: collect all models and their frames, search in bulk
     for model_name, frame_families in model_frames.items():
@@ -211,16 +212,20 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
                 continue
             text = tophits_to_domtbl(top_hits, header=False)
             for hit in parse_domtbl_text(text):
-                verified_results[(hit["target_name"], model_name)] = hit
+                verified_hits_list.append(hit)
+                verified_frames.add(hit["target_name"])
 
     t1 = time.time()
-    log.info(f"  Verification: {len(verified_results)} hits in {t1 - t0:.1f}s")
+    log.info(f"  Verification: {len(verified_hits_list)} hits in {t1 - t0:.1f}s")
 
     # Step 3: Build classification output
     classifications = []
 
     for (frame, family), (model, facet_score, facet_M) in top_per_family.items():
         confidence = _get_confidence(facet_score, facet_M, is_dna)
+
+        # Check if this frame got any verification hit
+        is_verified = frame in verified_frames
 
         entry = {
             "frame": frame,
@@ -229,17 +234,20 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
             "facet_score": facet_score,
             "facet_M": facet_M,
             "confidence": confidence,
-            "verified": False,
+            "verified": is_verified,
             "full_score": None,
             "full_hit": None,
         }
 
-        # Check verification
-        vkey = (frame, model)
-        if vkey in verified_results:
-            entry["verified"] = True
-            entry["full_score"] = verified_results[vkey]["dom_score"]
-            entry["full_hit"] = verified_results[vkey]
+        # Find best domain score for this (frame, model) from verified hits
+        if is_verified:
+            best_score = None
+            for h in verified_hits_list:
+                if h["target_name"] == frame and h["query_name"] == model:
+                    if best_score is None or h["dom_score"] > best_score:
+                        best_score = h["dom_score"]
+                        entry["full_hit"] = h
+            entry["full_score"] = best_score
 
         classifications.append(entry)
 
@@ -264,10 +272,7 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
     log.info(f"  {n_primary} primary assignments, "
              f"{n_verified} verified ({100*n_verified/max(n_primary,1):.1f}%)")
 
-    # Collect all verified hit dicts for database storage
-    verified_hit_list = [hit for hit in verified_results.values()]
-
-    return classifications, unclassified, verified_hit_list
+    return classifications, unclassified, verified_hits_list
 
 
 def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
