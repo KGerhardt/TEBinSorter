@@ -237,3 +237,18 @@ HMM model runtimes scale approximately with their model length M^2. Longer model
 TEBinSorter wrangles this problem by caclulating the expected runtime cost of each HMM model in a database in advance (cost=M^2), and grouping them into one bin of "close enough in size to run in 'queries' mode" and one bin of "large models that benefit from 'targets' mode. Small models are those whose M^2 is <= the 75th percentile + (2 x IQR) among model costs for that database. Large models are any others.
 
 This all effects low-overhead, near-perfect parallelism in the most efficient available modes. Sequences are reused from the same in-memory object for both searches, so there is essentially no cost to this process.
+
+### Facets search
+
+The facets search is staged:
+
+- Extracted facets from all models are searched with --nobias settings exactly like the full sequences are in the legacy search
+- The top facet hits for each sequence are ordered by hit quality, noting the parent HMM model that the facet hit corresponds to.
+- Each sequence is searched against its top scoring facet's parent at full length using --nobias. This is exactly the same search that the legacy module does, just targeted instead of exhaustive
+- If a sequence lands a full-length model hit, it is "verified" and no further searches are done. If not, the next best scoring facet hit for a different parent HMM model is used. The process repeats until the sequence verifies, or falls out. Most sequences verify against their first facet hit. Almost all verify within 3.
+- Because the verification stops at a single best hit, it's possible a sequence may have domains marked by a different family of TEs which are not reached by way of the facet search + verification. The cross-domain search module takes each verified facet hit and searches the same sequence against the top facet hit of each other TE family. This ensures that the sequence gets both primary and secondary labelling sensitivity.
+- Finally, the remaining sequences which are unclassified by this point, including those with facet hits but which failed any level of verification, are searched in legacy mode.
+
+The expensive parts of HMMer occur exactly when a match is found. What the facets search does is (relatively) route each sequence to exactly and only the HMM models likely to produce its best hits. This saves expensive, and for TEs extremely repetitive search cost. Most HMM models within the same TE family, e.g. SINEs, will all hit the same sequence at differing strengths. This is exactly when HMMer will burn a lot of runtime, but all of the weaker hits would be discarded later, anyway. It's better to not do them at all.
+
+The remnant sequences shunted to the legacy search are mostly genuine rejects with no TE signal according to the TESorter databases. They are, mostly, quickly rejected by every model. These are comparatively inexpensive searches - for example, a rexDB legacy search spends ~92% of its runtime finding the hits within just 71k of about 880k protein frames in our largest testing dataset. In a facets search, only the ~6% of sequences missed by the facets have real costs to searching in this way. This is the other major location where a facets search saves time.
