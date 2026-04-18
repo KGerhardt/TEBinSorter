@@ -63,8 +63,9 @@ def resolve_db(name):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        prog="ksort",
-        description="TE classification via two-pass HMM search.",
+        prog="TEBinSorter",
+        description="Fast TE classification using HMM profile databases. "
+                    "Default mode produces results identical to TEsorter.",
     )
     parser.add_argument(
         "sequence",
@@ -83,44 +84,23 @@ def parse_args():
         help="Search against all known databases",
     )
     parser.add_argument(
-        "--quick",
-        action="store_true",
-        default=False,
-        help="Quick mode: sub-HMM triage assigns each frame to its best "
-             "model, confirms with one nobias search, leftovers get full "
-             "legacy search. Faster than default on typical inputs.",
-    )
-    parser.add_argument(
         "--facet",
         action="store_true",
         default=False,
-        help="Facet mode: sub-HMM screen -> verify top hit per family -> "
-             "confidence-tiered reporting -> legacy fallback. Fastest mode "
-             "with ~94%% family recall.",
+        help="Facet mode: sub-HMM pre-screen -> verify top hit per family "
+             "-> cross-family completion -> legacy fallback. Faster on AA "
+             "databases with 99.8%% post-filter recall. DNA databases "
+             "automatically use default mode.",
     )
-    parser.add_argument(
-        "--iterative",
-        action="store_true",
-        default=False,
-        help="Iterative mode: facet screen -> graph-guided confirmation "
-             "rounds -> legacy fallback on unresolved frames.",
-    )
-    parser.add_argument(
-        "--two-pass",
-        action="store_true",
-        default=False,
-        help="Use two-pass search: fast coarse screen with bias filter, "
-             "then sensitive search on plausible pairs only. Faster on "
-             "genomic input where most sequence is non-TE. Default mode "
-             "is single-pass nobias (equivalent to TEsorter).",
-    )
-    parser.add_argument(
-        "--pass-1-only",
-        action="store_true",
-        default=False,
-        help="Run only the coarse pass-1 screen and store results. "
-             "Implies --two-pass. Inspect the database before running pass 2.",
-    )
+    # Deprecated modes -- retained for backward compatibility, hidden from help
+    parser.add_argument("--quick", action="store_true", default=False,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--iterative", action="store_true", default=False,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--two-pass", action="store_true", default=False,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--pass-1-only", action="store_true", default=False,
+                        help=argparse.SUPPRESS)
     parser.add_argument(
         "-o", "--outdir",
         default=None,
@@ -137,22 +117,14 @@ def parse_args():
         default=4,
         help="Processors to use [default: 4]",
     )
-    parser.add_argument(
-        "--F1",
-        type=float,
-        default=0.02,
-        help="MSV filter threshold for pass-1 screen. Higher values are "
-             "more permissive. HMMER default is 0.02. Set to 0.1 to capture "
-             "hits in compositionally biased sequences at ~10%% runtime cost. "
-             "[default: %(default)s]",
-    )
+    parser.add_argument("--F1", type=float, default=0.02,
+                        help=argparse.SUPPRESS)  # deprecated, two-pass only
     parser.add_argument(
         "--emit-bath",
         action="store_true",
         default=False,
-        help="After pass 1, emit routed FASTA partitions for the BATH "
-             "aligner instead of running pass 2. Output goes to "
-             "{prefix}.BATHwater/ directory.",
+        help="Emit routed FASTA partitions for the BATH aligner. "
+             "Output goes to {outdir}/BATHwater/ directory.",
     )
     parser.add_argument(
         "--include-sine-so",
