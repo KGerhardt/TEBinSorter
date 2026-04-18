@@ -198,7 +198,7 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 
 ## HMM facets
 
-The concept of an HMM facet is one I've been exploring for other projects but found a use for in this one. By utlizing pyhmmer, we can observe the emission probabilities of an HMM model in a friendly manner in Python. I use these emission probabilities to find conserved subregions of the HMM model which are highly influential in the decisionmaking process of HMMer to actually search a sequence. These regions are extracted to form a "facet." There are multiple advantages to this approach:
+The concept of an HMM facet is one I've been exploring for other projects but found a use for in this one. By utlizing pyhmmer, we can observe the emission probabilities of an HMM model in a friendly manner in Python. I use these emission probabilities to find conserved subregions of the HMM model which are highly influential in the decisionmaking process of HMMer to actually search a sequence. These high-influence regions are extracted to form a "facet," whose emission probabilities are cloned from the original's over the corresponding window. There are multiple advantages to this approach:
 
 * Short models tend towards specificity. A full-length model will make an effort to compile information about required search effort across an entire sequence, while short models confirm or reject a local region quickly.
 * Much of the information that the full-length model would glean about the appropriateness of a a search from a long view of a sequence is extremely highly correlated with what a good facet will report. A good facet hit almost ensures a good full-length model hit.
