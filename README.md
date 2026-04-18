@@ -1,6 +1,8 @@
 # TEBinSorter
 
-Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter) at greatly improved speed. Most differences in replication are the result of small bugfixes in TEBinSorter.
+Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter) at greatly improved speed. 
+
+Most differences in TESorter replication are the result of small bugfixes in TEBinSorter.
 
 ## How it works
 
