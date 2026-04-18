@@ -49,13 +49,13 @@ Rice TE library (2,431 sequences), 4 processors.
 
 | Database | Models | TEsorter | TEBinSorter | Speedup |
 |----------|--------|----------|-------------|---------|
-| TIR | 17 | 26m 41s | 0.9s | ~1,779x |
-| LINE | 28 | 56m 45s | 1.7s | ~2,003x |
-| SINE | 88 | ~30m | 38.1s | ~47x |
-| REXdb | 266 | >2h | 20.2s | >356x |
-| GyDB | 314 | >2h | 18.3s | >393x |
+| TIR | 17 | 26m 41s | 1.0s | ~1,601x |
+| LINE | 28 | 56m 45s | 1.8s | ~1,892x |
+| SINE | 88 | ~30m | 39.4s | ~46x |
+| REXdb | 266 | >2h | 18.9s | >381x |
+| GyDB | 314 | >2h | 18.7s | >385x |
 
-All 5 databases searched in **79 seconds** total (4 processors).
+All 5 databases searched in **80 seconds** total search time, **96 seconds** wall clock (4 processors).
 
 ### Facet mode (amino acid databases)
 
