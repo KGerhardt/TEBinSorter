@@ -72,7 +72,7 @@ Rice TE library, REXdb (266 models), with cross-family completion:
 
 ### Verification against TEsorter
 
-Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results filtered using TEsorter's exact thresholds (`coverage >= 20`, `evalue <= 1e-3`, `probability >= 0.5`, `normalized score >= 0.1`) and compared at the (sequence, model) pair level.
+Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results filtered using TEsorter's exact thresholds (`coverage >= 20`, `evalue <= 1e-3`, `probability >= 0.5`, `normalized score >= 0.1`) and compared at the (sequence, model) pair level. Run with --compat-tesorter-rounding for demonstration purposes.
 
 | Database | TEsorter pairs | TEBinSorter pairs | Common | TEsorter only | Notes |
 |----------|---------------|-------------------|--------|---------------|-------|
