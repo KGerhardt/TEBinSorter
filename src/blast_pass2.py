@@ -202,7 +202,8 @@ def classify_from_blast(conn, classifications, database=None,
 
     Args:
         conn: sqlite3 connection with blast_hits table
-        classifications: dict of {seq_id: classification_dict} from HMM step
+        classifications: dict of {seq_id: {order, superfamily, ...}} from
+                         classifier.classify_sequences()
         database: if set, only accept BLAST targets classified by this database
         min_identity: minimum percent identity
         min_coverage: minimum query coverage
@@ -211,6 +212,12 @@ def classify_from_blast(conn, classifications, database=None,
     Returns:
         list of classification dicts for newly classified sequences
     """
+    # Check table exists
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "blast_hits" not in tables:
+        return []
+
     # Build filter
     where = "WHERE pident >= ? AND qcovs >= ? AND length >= ?"
     params = [min_identity, min_coverage, min_length]
@@ -219,7 +226,7 @@ def classify_from_blast(conn, classifications, database=None,
         where += " AND classified_by LIKE ?"
         params.append(f"%{database}%")
 
-    # Best hit per query
+    # Best hit per query by bitscore
     rows = conn.execute(f"""
         SELECT qseqid, sseqid, pident, qcovs, length, bitscore
         FROM blast_hits
@@ -227,23 +234,26 @@ def classify_from_blast(conn, classifications, database=None,
         ORDER BY bitscore DESC
     """, params).fetchall()
 
+    # Classified ID set for quick lookup
+    classified_set = set(classifications.keys())
+
     best = {}
     for qid, sid, pident, qcovs, length, bitscore in rows:
+        if qid in classified_set:
+            continue  # already classified by HMM, skip
         if qid not in best:
             best[qid] = (sid, pident, qcovs, length, bitscore)
 
     # Inherit classification from best hit's target
     new_classifications = []
+    no_source = 0
     for qid, (sid, pident, qcovs, length, bitscore) in best.items():
-        if qid in classifications:
-            continue  # already classified by HMM
-
         if sid in classifications:
             source = classifications[sid]
             new_classifications.append({
                 "id": qid,
-                "order": source.get("order", "Unknown"),
-                "superfamily": source.get("superfamily", "unknown"),
+                "order": source["order"],
+                "superfamily": source["superfamily"],
                 "clade": "unknown",
                 "complete": "none",
                 "strand": "?",
@@ -253,13 +263,19 @@ def classify_from_blast(conn, classifications, database=None,
                 "blast_qcovs": qcovs,
                 "blast_bitscore": bitscore,
             })
+        else:
+            no_source += 1
+
+    if no_source:
+        log.info(f"    {no_source} BLAST hits to unclassified targets (skipped)")
 
     log.info(f"  BLAST pass-2: {len(new_classifications)} sequences classified "
-             f"(from {len(best)} BLAST hits passing filters)")
+             f"(from {len(best)} hits passing filters)")
     return new_classifications
 
 
-def blast_pass2(input_fasta, conn, seq_type="nucl", n_processors=4,
+def blast_pass2(input_fasta, conn, hmm_classifications=None,
+                seq_type="nucl", n_processors=4,
                 min_identity=80, min_coverage=80, min_length=80,
                 outdir=None):
     """Full BLAST pass-2 pipeline.
@@ -267,6 +283,9 @@ def blast_pass2(input_fasta, conn, seq_type="nucl", n_processors=4,
     Args:
         input_fasta: path to input FASTA
         conn: sqlite3 connection with HMM results
+        hmm_classifications: dict of {seq_id: {order, superfamily, clade, ...}}
+                             from classifier.classify_sequences(). Targets inherit
+                             classification from their best BLAST match.
         seq_type: "nucl" or "prot"
         n_processors: number of parallel BLAST processes
         min_identity: filter threshold
@@ -332,27 +351,9 @@ def blast_pass2(input_fasta, conn, seq_type="nucl", n_processors=4,
         store_blast_hits(conn, all_hits, db_seq_to_dbs)
 
     # Build HMM classifications lookup for inheritance
-    # Load from classifier results in the database
     hmm_cls = {}
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-
-    # Try to load from any classification output we have
-    if "legacy_hits" in tables:
-        from classifier import hmm2best, apply_filters, classify_element
-        from classifier import REXDB_CONFIG, GYDB_CONFIG, DB_CONFIGS
-        from deconflict import load_hits
-
-        # Simple approach: load classifier results if available
-        # For now, just build from base_seq -> best classification
-        for row in conn.execute("""
-            SELECT DISTINCT base_seq, database FROM legacy_hits
-        """):
-            if row[0] not in hmm_cls:
-                hmm_cls[row[0]] = {"order": "Unknown", "superfamily": "unknown"}
-
-    # If we have classifier TSV outputs, load those
-    # For now, use a simplified approach
+    if hmm_classifications is not None:
+        hmm_cls = hmm_classifications
     log.info(f"  {len(hmm_cls)} HMM classifications available for inheritance")
 
     # Classify

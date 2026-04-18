@@ -23,6 +23,9 @@ from iterative_search import iterative_search
 from facet_classify import facet_classify, export_classifications_tsv
 from cross_family import find_missing_families, search_missing
 from id_registry import IDRegistry
+from classifier import (classify_sequences, export_classification_tsv,
+                       store_classifications, DB_CONFIGS)
+from blast_pass2 import blast_pass2
 from deconflict import (store_hits_numeric, load_hits_fast,
                         best_per_family_numeric, best_per_frame_numeric,
                         NUMERIC_HITS_SCHEMA)
@@ -403,6 +406,55 @@ def main():
                 log.info(f"  Emitting BATH partitions to {bath_dir}/")
                 emit_partitions(conn, seq_fasta, path, bath_dir,
                                 n_workers=args.processors, db_name=name)
+
+    # --- Classification ---
+    log.info("--- Classification ---")
+    from deconflict import load_hits
+    all_classifications = {}
+
+    for name in db_names:
+        config = DB_CONFIGS.get(name)
+        if config is None:
+            log.warning(f"  No classifier config for {name}, skipping")
+            continue
+
+        hits = load_hits(db_path_out, table="legacy_hits", database=name)
+        if hits is None:
+            continue
+
+        log.info(f"  Classifying {name}")
+        results = classify_sequences(hits, config,
+                                     compat_rounding=args.compat_tesorter_rounding)
+
+        # Store as {seq_id: classification} for BLAST inheritance
+        for r in results:
+            all_classifications[r["id"]] = r
+
+        # Store and export per-database classification
+        store_classifications(conn, results, database=name)
+        cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
+        export_classification_tsv(results, cls_tsv)
+        log.info(f"    {len(results)} classified -> {cls_tsv}")
+
+    # --- BLAST pass-2 ---
+    if not args.pass_1_only and all_classifications:
+        log.info("--- BLAST pass-2 ---")
+        blast_cls = blast_pass2(
+            args.sequence, conn,
+            hmm_classifications=all_classifications,
+            seq_type="nucl",
+            n_processors=args.processors,
+            outdir=outdir,
+        )
+
+        if blast_cls:
+            store_classifications(conn, blast_cls, database="blast_pass2")
+
+            # Export combined classification
+            all_results = list(all_classifications.values()) + blast_cls
+            combined_tsv = os.path.join(outdir, f"{prefix}.cls.tsv")
+            export_classification_tsv(all_results, combined_tsv)
+            log.info(f"  Combined: {len(all_results)} classified -> {combined_tsv}")
 
     # TODO: rewrite exports with numpy for large datasets
     # Flat file exports temporarily disabled -- results are in the SQLite db

@@ -447,6 +447,36 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False)
     return results
 
 
+def store_classifications(conn, results, database=None):
+    """Store classification results in SQLite."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS classifications (
+            seq_id      TEXT NOT NULL,
+            database    TEXT,
+            te_order    TEXT NOT NULL,
+            superfamily TEXT NOT NULL,
+            clade       TEXT NOT NULL,
+            complete    TEXT NOT NULL,
+            strand      TEXT NOT NULL,
+            domains     TEXT,
+            source      TEXT NOT NULL DEFAULT 'hmm'
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_seq ON classifications(seq_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_db ON classifications(database)")
+
+    rows = [(r["id"], database, r["order"], r["superfamily"], r["clade"],
+             r["complete"], r["strand"], r["domains"],
+             r.get("blast_source", "hmm") if "blast_source" in r else "hmm")
+            for r in results]
+
+    conn.executemany(
+        "INSERT INTO classifications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
 def export_classification_tsv(results, out_path):
     """Export classification results as TSV (TEsorter cls.tsv format)."""
     columns = ["#TE", "Order", "Superfamily", "Clade", "Complete",
