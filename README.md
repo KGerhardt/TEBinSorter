@@ -57,7 +57,7 @@ Rice TE library (2,431 sequences), 4 processors.
 | REXdb | 266 | >2h | 18.9s | >381x |
 | GyDB | 314 | >2h | 18.7s | >385x |
 
-All 5 databases searched in **51 seconds** total search time, **67 seconds** wall clock (4 processors). SINE_SO excluded by default.
+All 5 databases searched in **50 seconds** total search time, **54 seconds** wall clock (4 processors). SINE_SO excluded by default.
 
 ### Facet mode (amino acid databases)
 
@@ -176,9 +176,12 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 
 | File | Description |
 |------|-------------|
-| `{prefix}.db` | SQLite database with all results |
+| `{prefix}.db` | SQLite database with all results (hits, classifications, BLAST) |
 | `{prefix}.aa` | Six-frame translated amino acid sequences (indexed) |
+| `{prefix}.{db}.cls.tsv` | Per-database TE classifications (order, superfamily, clade, completeness) |
+| `{prefix}.cls.tsv` | Combined classifications across all databases + BLAST pass-2 |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (facet mode) |
+| `blast_pass2/` | BLAST database and query chunks (temporary) |
 
 ## Architecture
 
@@ -198,9 +201,10 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 - **`facet_classify.py`** — Facet screen → verification → cross-family completion → legacy fallback
 - **`cross_family.py`** — Targeted search for missing domain families in classified frames
 
-### Utilities
+### Classification and post-processing
 
-- **`id_registry.py`** — Deterministic integer ID registry for fast numeric storage
+- **`classifier.py`** — Config-driven TE classification from domain hits. Per-database rules for domain remapping, overlap-aware deconfliction, order/superfamily/clade assignment.
+- **`blast_pass2.py`** — BLAST-based pass-2 classification for HMM-unclassified sequences. Parallel chunked BLAST with cross-database target pooling.
 
 # Extended methods
 
