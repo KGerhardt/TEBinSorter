@@ -14,8 +14,9 @@ from hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA
 from search import build_sequence_block, legacy_search
 from sequence import translate_fasta, open_input
 from results import create_db, store_sequences, store_legacy
-from facet_classify import facet_classify, export_classifications_tsv
-from cross_family import find_missing_families, search_missing
+from facet_classify import (facet_classify, facet_classify_v2,
+                            export_classifications_tsv)
+from cross_family import find_missing_families, search_missing, search_missing_v2
 from classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, DB_CONFIGS)
 from blast_pass2 import blast_pass2
@@ -316,7 +317,7 @@ def main():
 
         if args.facet and alphabet != DNA_ALPHABET:
             t_f0 = time.time()
-            classifications, f_verified, f_legacy = facet_classify(
+            classifications, f_verified, f_cross, f_legacy = facet_classify_v2(
                 path, seq_block, seq_fasta, alphabet,
                 n_workers=args.processors,
                 checkpoint_dir=outdir)
@@ -324,25 +325,13 @@ def main():
             n_primary = sum(1 for c in classifications if not c.get("is_secondary"))
             log.info(f"  Facet mode: {n_primary} assignments, "
                      f"{len(f_verified)} verified, "
+                     f"{len(f_cross)} cross-family, "
                      f"{len(f_legacy)} legacy hits in {t_f1 - t_f0:.1f}s")
             # Store: 0=facet verified, 1=cross-family, 2=legacy fallback
             if f_verified:
                 store_legacy(conn, f_verified, name, search_mode=0)
-
-            # Cross-family check: search missing families for classified frames
-            from hmm import load_hmms as _load
-            _hmms = _load(path)
-            _hmms_dict = {h.name: h for h in _hmms}
-            missing, _ = find_missing_families(classifications, _hmms_dict)
-            if missing:
-                log.info(f"  Cross-family check: {len(missing)} frames")
-                cf_hits = search_missing(
-                    missing, _hmms_dict, seq_block, alphabet)
-                if cf_hits:
-                    store_legacy(conn, cf_hits, name, search_mode=1)
-                    log.info(f"    {len(cf_hits)} cross-family hits stored")
-
-            # Legacy fallback
+            if f_cross:
+                store_legacy(conn, f_cross, name, search_mode=1)
             if f_legacy:
                 store_legacy(conn, f_legacy, name, search_mode=2)
             # Export classifications

@@ -132,7 +132,8 @@ def facet_screen(hmm_path, seq_block, window_size=64, max_overlap_frac=0.33,
 
 
 def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
-                    min_facet_score=10.0, n_workers=4, is_dna=False):
+                    min_facet_score=10.0, n_workers=4, is_dna=False,
+                    optimized=None):
     """
     Classify frames using facet scores + targeted full-model verification.
 
@@ -202,9 +203,10 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
         subset = [seq_block[i] for i in indices]
         sub_block = easel.DigitalSequenceBlock(alphabet, subset)
 
-        hmm = hmms_dict[model_name]
+        search_obj = ([optimized[model_name]] if optimized and model_name in optimized
+                      else [hmms_dict[model_name]])
         for top_hits in pyhmmer.hmmsearch(
-            [hmm], sub_block,
+            search_obj, sub_block,
             bias_filter=False,
             Z=Z, domZ=Z, E=1e10, domE=1e10,
         ):
@@ -219,6 +221,11 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
     log.info(f"  Verification: {len(verified_hits_list)} hits in {t1 - t0:.1f}s")
 
     # Step 3: Build classification output
+    # Index verified hits by (frame, model) for O(1) lookup
+    verified_by_key = defaultdict(list)
+    for h in verified_hits_list:
+        verified_by_key[(h["target_name"], h["query_name"])].append(h)
+
     classifications = []
 
     for (frame, family), (model, facet_score, facet_M) in top_per_family.items():
@@ -241,13 +248,11 @@ def classify_frames(facet_hits, hmms_dict, seq_block, alphabet,
 
         # Find best domain score for this (frame, model) from verified hits
         if is_verified:
-            best_score = None
-            for h in verified_hits_list:
-                if h["target_name"] == frame and h["query_name"] == model:
-                    if best_score is None or h["dom_score"] > best_score:
-                        best_score = h["dom_score"]
-                        entry["full_hit"] = h
-            entry["full_score"] = best_score
+            key_hits = verified_by_key.get((frame, model), [])
+            if key_hits:
+                best = max(key_hits, key=lambda h: h["dom_score"])
+                entry["full_score"] = best["dom_score"]
+                entry["full_hit"] = best
 
         classifications.append(entry)
 
@@ -292,6 +297,10 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
     hmms_dict = {h.name: h for h in hmms}
     Z = len(hmms)
 
+    # Pre-optimize profiles for verification calls
+    from hmm import build_optimized_profiles
+    optimized = build_optimized_profiles(hmms)
+
     # Detect DNA vs AA
     is_dna = hmms[0].alphabet == easel.Alphabet.dna() if hmms else False
 
@@ -315,7 +324,7 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
     classifications, unclassified, verified_hits = classify_frames(
         facet_hits, hmms_dict, seq_block, alphabet,
         min_facet_score=min_facet_score, n_workers=n_workers,
-        is_dna=is_dna)
+        is_dna=is_dna, optimized=optimized)
 
     # Step 3: Legacy fallback on unclassified
     legacy_hits = []
@@ -346,6 +355,249 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
             log.info(f"    {len(legacy_hits)} legacy hits in {t1 - t0:.1f}s")
 
     return classifications, verified_hits, legacy_hits
+
+
+# ---------------------------------------------------------------------------
+# v2: targets-parallel verification + reordered pipeline
+# ---------------------------------------------------------------------------
+
+def classify_frames_v2(facet_hits, hmms_dict, seq_block, alphabet,
+                       min_facet_score=10.0, n_workers=4, is_dna=False,
+                       optimized=None):
+    """
+    Classify frames using facet scores + targeted full-model verification (v2).
+
+    Same as classify_frames but uses parallel='targets' for each single-model
+    verification call, giving full thread utilization instead of single-threaded
+    default.
+
+    Returns:
+        classifications: list of classification dicts
+        unclassified_frames: set of frame names with no facet signal
+        verified_hits_list: list of all verification hit dicts
+    """
+    Z = len(hmms_dict)
+    name_to_idx = {seq_block[i].name: i for i in range(len(seq_block))}
+
+    all_frame_names = set(name_to_idx.keys())
+    frames_with_signal = set(facet_hits.keys())
+    unclassified = all_frame_names - frames_with_signal
+
+    # Step 1: Find best facet per (frame, family), filtered by min score
+    top_per_family = {}  # (frame, family) -> (model, score, facet_M)
+    other_hits = defaultdict(list)
+
+    for frame, model_scores in facet_hits.items():
+        by_family = defaultdict(list)
+        for model, (score, fM) in model_scores.items():
+            if score < min_facet_score:
+                continue
+            family = _get_family(model)
+            by_family[family].append((model, score, fM))
+
+        for family, candidates in by_family.items():
+            candidates.sort(key=lambda x: -x[1])
+            top_per_family[(frame, family)] = candidates[0]
+            if len(candidates) > 1:
+                other_hits[(frame, family)] = candidates[1:]
+
+    log.info(f"  {len(top_per_family)} (frame, family) assignments to verify")
+
+    # Step 2: Verify top picks with full-model nobias search
+    # Group frames by their top model for per-model searching
+    model_frames = defaultdict(list)
+    for (frame, family), (model, score, fM) in top_per_family.items():
+        model_frames[model].append((frame, family))
+
+    # Sort by descending cost so expensive models start first
+    model_order = sorted(model_frames.keys(),
+                         key=lambda m: (hmms_dict[m].M ** 2 * len(model_frames[m])
+                                        if m in hmms_dict else 0),
+                         reverse=True)
+
+    log.info(f"  Verifying against {len(model_order)} unique models")
+    t0 = time.time()
+
+    verified_hits_list = []
+    verified_frames = set()
+
+    for model_name in model_order:
+        if model_name not in hmms_dict:
+            continue
+
+        frames = [ff[0] for ff in model_frames[model_name]]
+        indices = [name_to_idx[f] for f in frames if f in name_to_idx]
+        if not indices:
+            continue
+
+        subset = [seq_block[i] for i in indices]
+        sub_block = easel.DigitalSequenceBlock(alphabet, subset)
+
+        search_obj = ([optimized[model_name]] if optimized and model_name in optimized
+                      else [hmms_dict[model_name]])
+        for top_hits in pyhmmer.hmmsearch(
+            search_obj, sub_block,
+            bias_filter=False,
+            Z=Z, domZ=Z, E=1e10, domE=1e10,
+            parallel="targets",
+        ):
+            if len(top_hits) == 0:
+                continue
+            text = tophits_to_domtbl(top_hits, header=False)
+            for hit in parse_domtbl_text(text):
+                verified_hits_list.append(hit)
+                verified_frames.add(hit["target_name"])
+
+    t1 = time.time()
+    log.info(f"  Verification: {len(verified_hits_list)} hits in {t1 - t0:.1f}s")
+
+    # Step 3: Build classification output
+    verified_by_key = defaultdict(list)
+    for h in verified_hits_list:
+        verified_by_key[(h["target_name"], h["query_name"])].append(h)
+
+    classifications = []
+
+    for (frame, family), (model, facet_score, facet_M) in top_per_family.items():
+        confidence = _get_confidence(facet_score, facet_M, is_dna)
+        is_verified = frame in verified_frames
+
+        entry = {
+            "frame": frame,
+            "family": family,
+            "model": model,
+            "facet_score": facet_score,
+            "facet_M": facet_M,
+            "confidence": confidence,
+            "verified": is_verified,
+            "full_score": None,
+            "full_hit": None,
+        }
+
+        if is_verified:
+            key_hits = verified_by_key.get((frame, model), [])
+            if key_hits:
+                best = max(key_hits, key=lambda h: h["dom_score"])
+                entry["full_score"] = best["dom_score"]
+                entry["full_hit"] = best
+
+        classifications.append(entry)
+
+        for alt_model, alt_score, alt_fM in other_hits.get((frame, family), []):
+            classifications.append({
+                "frame": frame,
+                "family": family,
+                "model": alt_model,
+                "facet_score": alt_score,
+                "facet_M": alt_fM,
+                "confidence": _get_confidence(alt_score, alt_fM),
+                "verified": False,
+                "full_score": None,
+                "full_hit": None,
+                "is_secondary": True,
+            })
+
+    n_verified = sum(1 for c in classifications
+                     if c.get("verified") and not c.get("is_secondary"))
+    n_primary = sum(1 for c in classifications if not c.get("is_secondary"))
+    log.info(f"  {n_primary} primary assignments, "
+             f"{n_verified} verified ({100*n_verified/max(n_primary,1):.1f}%)")
+
+    return classifications, unclassified, verified_hits_list
+
+
+def facet_classify_v2(hmm_path, seq_block, seq_fasta, alphabet,
+                      n_workers=4, window_size=64, max_overlap_frac=0.33,
+                      min_facet_score=10.0, checkpoint_dir=None):
+    """
+    Full facet classification pipeline (v2).
+
+    Reordered: facet screen -> verify -> cross-family -> legacy fallback.
+    Uses targets-parallel verification and per-model cross-family search.
+
+    Returns:
+        classifications: list of classification dicts
+        verified_hits: list of verified hit dicts
+        cross_family_hits: list of cross-family hit dicts
+        legacy_hits: list of legacy fallback hit dicts
+    """
+    import os
+
+    from cross_family import find_missing_families, search_missing_v2
+
+    hmms = _load_hmms(hmm_path)
+    hmms_dict = {h.name: h for h in hmms}
+    Z = len(hmms)
+
+    from hmm import build_optimized_profiles
+    optimized = build_optimized_profiles(hmms)
+
+    is_dna = hmms[0].alphabet == easel.Alphabet.dna() if hmms else False
+
+    if is_dna and min_facet_score > 0:
+        min_facet_score = -20.0
+        log.info(f"  DNA database detected, using min_facet_score={min_facet_score}")
+
+    # Step 1: Facet screen
+    ckpt = None
+    if checkpoint_dir:
+        db_base = os.path.basename(hmm_path)
+        ckpt = os.path.join(checkpoint_dir, f"{db_base}.facets.json")
+
+    log.info("  --- Facet classification (v2) ---")
+    facet_hits = facet_screen(
+        hmm_path, seq_block, window_size, max_overlap_frac,
+        checkpoint_path=ckpt)
+
+    # Step 2: Classify + verify (targets-parallel)
+    classifications, unclassified, verified_hits = classify_frames_v2(
+        facet_hits, hmms_dict, seq_block, alphabet,
+        min_facet_score=min_facet_score, n_workers=n_workers,
+        is_dna=is_dna, optimized=optimized)
+
+    # Step 3: Cross-family completion (before legacy fallback)
+    cross_family_hits = []
+    missing, _ = find_missing_families(classifications, hmms_dict)
+    if missing:
+        log.info(f"  Cross-family check: {len(missing)} frames")
+        cross_family_hits = search_missing_v2(
+            missing, hmms_dict, seq_block, alphabet,
+            optimized=optimized)
+
+    # Step 4: Legacy fallback on unclassified
+    legacy_hits = []
+    if unclassified:
+        log.info(f"  Legacy fallback on {len(unclassified)} unclassified frames")
+        name_to_idx = {seq_block[i].name: i for i in range(len(seq_block))}
+        leftover = [seq_block[name_to_idx[f]] for f in unclassified
+                    if f in name_to_idx]
+
+        if leftover:
+            t0 = time.time()
+            leftover_block = easel.DigitalSequenceBlock(alphabet, leftover)
+            normal, outliers = _partition_hmms_by_size(hmms)
+
+            if normal:
+                legacy_hits.extend(_collect_hits(pyhmmer.hmmsearch(
+                    normal, leftover_block,
+                    bias_filter=False, Z=Z, domZ=Z, E=1e10, domE=1e10,
+                    parallel="queries",
+                )))
+            if outliers:
+                legacy_hits.extend(_collect_hits(pyhmmer.hmmsearch(
+                    outliers, leftover_block,
+                    bias_filter=False, Z=Z, domZ=Z, E=1e10, domE=1e10,
+                    parallel="targets",
+                )))
+            t1 = time.time()
+            log.info(f"    {len(legacy_hits)} legacy hits in {t1 - t0:.1f}s")
+
+    n_cf = len(cross_family_hits)
+    n_lg = len(legacy_hits)
+    log.info(f"  Totals: {len(verified_hits)} verified, "
+             f"{n_cf} cross-family, {n_lg} legacy")
+
+    return classifications, verified_hits, cross_family_hits, legacy_hits
 
 
 def export_classifications_tsv(classifications, out_path):

@@ -59,7 +59,7 @@ def find_missing_families(classifications, hmms_dict):
     return missing, all_families
 
 
-def search_missing(missing, hmms_dict, seq_block, alphabet, Z=None):
+def search_missing(missing, hmms_dict, seq_block, alphabet, Z=None, optimized=None):
     """Search missing families for classified frames.
 
     Groups by model for efficient batching: each model searches only
@@ -116,7 +116,7 @@ def search_missing(missing, hmms_dict, seq_block, alphabet, Z=None):
         if len(batch_models) >= BATCH_SIZE:
             hits = _run_batch(batch_models, batch_frames, hmms_dict,
                               seq_block, name_to_idx, alphabet, Z,
-                              model_frames)
+                              model_frames, optimized=optimized)
             all_hits.extend(hits)
             batch_models = []
             batch_frames = set()
@@ -125,7 +125,7 @@ def search_missing(missing, hmms_dict, seq_block, alphabet, Z=None):
     if batch_models:
         hits = _run_batch(batch_models, batch_frames, hmms_dict,
                           seq_block, name_to_idx, alphabet, Z,
-                          model_frames)
+                          model_frames, optimized=optimized)
         all_hits.extend(hits)
 
     t1 = time.time()
@@ -135,10 +135,13 @@ def search_missing(missing, hmms_dict, seq_block, alphabet, Z=None):
 
 
 def _run_batch(model_names, frame_names, hmms_dict, seq_block,
-               name_to_idx, alphabet, Z, model_frames):
+               name_to_idx, alphabet, Z, model_frames, optimized=None):
     """Run one batch of models against their needed frames."""
-    hmms = [hmms_dict[m] for m in model_names if m in hmms_dict]
-    if not hmms:
+    if optimized:
+        search_objs = [optimized[m] for m in model_names if m in optimized]
+    else:
+        search_objs = [hmms_dict[m] for m in model_names if m in hmms_dict]
+    if not search_objs:
         return []
 
     # Build subset block
@@ -151,7 +154,7 @@ def _run_batch(model_names, frame_names, hmms_dict, seq_block,
 
     raw_hits = []
     for top_hits in pyhmmer.hmmsearch(
-        hmms, sub_block,
+        search_objs, sub_block,
         bias_filter=False,
         Z=Z, domZ=Z, E=1e10, domE=1e10,
     ):
@@ -166,3 +169,88 @@ def _run_batch(model_names, frame_names, hmms_dict, seq_block,
                 raw_hits.append(hit)
 
     return raw_hits
+
+
+# ---------------------------------------------------------------------------
+# v2: per-model targets-parallel search — zero wasted comparisons
+# ---------------------------------------------------------------------------
+
+def search_missing_v2(missing, hmms_dict, seq_block, alphabet, Z=None,
+                      optimized=None):
+    """Search missing families for classified frames (v2).
+
+    Each model searches exactly the frames that need it, using
+    parallel='targets' for full thread utilization. No batching,
+    no union bloat, no post-filtering — every comparison is useful.
+
+    Args:
+        missing: {frame: set(families)} from find_missing_families
+        hmms_dict: {model_name: HMM}
+        seq_block: DigitalSequenceBlock
+        alphabet: easel.Alphabet
+        Z: database size for E-values (default: len(hmms_dict))
+        optimized: {model_name: OptimizedProfile} (optional)
+
+    Returns:
+        list of hit dicts
+    """
+    if not missing:
+        return []
+
+    if Z is None:
+        Z = len(hmms_dict)
+
+    name_to_idx = {seq_block[i].name: i for i in range(len(seq_block))}
+
+    # Invert: for each model, which frames need it?
+    model_frames = defaultdict(set)
+    for frame, missed_families in missing.items():
+        for model_name in hmms_dict:
+            if _get_family(model_name) in missed_families:
+                model_frames[model_name].add(frame)
+
+    log.info(f"    {len(missing)} frames missing families, "
+             f"{len(model_frames)} models to search")
+
+    t0 = time.time()
+
+    # Sort by descending cost (M^2 * n_frames) so expensive models start first
+    model_costs = []
+    for model_name, frames in model_frames.items():
+        m = hmms_dict[model_name].M if model_name in hmms_dict else 0
+        model_costs.append((model_name, frames, m * m * len(frames)))
+    model_costs.sort(key=lambda x: -x[2])
+
+    all_hits = []
+    for model_name, frames, cost in model_costs:
+        # Get search object
+        if optimized and model_name in optimized:
+            search_obj = optimized[model_name]
+        elif model_name in hmms_dict:
+            search_obj = hmms_dict[model_name]
+        else:
+            continue
+
+        # Build subset block for exactly this model's needed frames
+        indices = [name_to_idx[f] for f in frames if f in name_to_idx]
+        if not indices:
+            continue
+
+        subset = [seq_block[i] for i in indices]
+        sub_block = easel.DigitalSequenceBlock(alphabet, subset)
+
+        for top_hits in pyhmmer.hmmsearch(
+            [search_obj], sub_block,
+            bias_filter=False,
+            Z=Z, domZ=Z, E=1e10, domE=1e10,
+            parallel="targets",
+        ):
+            if len(top_hits) == 0:
+                continue
+            text = tophits_to_domtbl(top_hits, header=False)
+            all_hits.extend(parse_domtbl_text(text))
+
+    t1 = time.time()
+    log.info(f"    {len(all_hits)} cross-family hits in {t1 - t0:.1f}s")
+
+    return all_hits

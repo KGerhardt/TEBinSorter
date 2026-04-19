@@ -92,6 +92,44 @@ Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results
 
 **TEsorter rounding bug:** TEsorter rounds `domain_score / model_length` to 2 decimal places before threshold comparison. This results in cases where 9.9 rounds -> 10 and therefore passes a TESorter filter it never should have. TEBinSorter uses full precision by default. `--compat-tesorter-rounding` replicates the old rounding behavior.
 
+### Large-scale benchmarks
+
+133,611 TE consensus sequences (concatenated filtered library), 10 processors, WSL2. The benchmark dataset is available on [Figshare](TODO: add DOI link after upload).
+
+#### Default mode (search only)
+
+All 5 databases, legacy search, no classification or BLAST pass-2:
+
+| Database | Models | Alphabet | Search time |
+|----------|--------|----------|-------------|
+| REXdb | 266 | amino | ~17min |
+| GyDB | 314 | amino | ~20min |
+| LINE | 28 | amino | ~65s |
+| TIR | 17 | amino | ~54s |
+| SINE | 87 | DNA | ~11min |
+| **Total** | | | **~25min** |
+
+#### Facet mode (full pipeline)
+
+4 amino acid databases, facet search + classification + BLAST pass-2:
+
+| Database | Facet screen | Verify | Cross-family | Legacy fallback | Total |
+|----------|-------------|--------|-------------|----------------|-------|
+| REXdb (266) | 277s | 60s | 36s | 97s | 488s |
+| GyDB (314) | 546s | 103s | 72s | 185s | 926s |
+| LINE (28) | 32s | 8s | 0s | 34s | 76s |
+| TIR (17) | 17s | 9s | 0s | 18s | 45s |
+
+| Pipeline stage | Time |
+|---------------|------|
+| Six-frame translation | 17s |
+| HMM search (4 databases) | 1535s |
+| Classification | 5s |
+| BLAST pass-2 | 38s |
+| **Total wall clock** | **26min 53s** |
+
+46,324 sequences classified (34.7% of input). LINE and TIR have single-family databases, so no cross-family search is needed.
+
 ### SINE_SO: excluded by default
 
 The AnnoSINE database contains SINE_SO (M=4,176), an outlier model 6x larger than the next largest SINE model. Analysis of its contribution:

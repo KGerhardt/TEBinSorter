@@ -369,15 +369,18 @@ def _plan_work_units(model_seqs, hmms_dict, seq_lens, n_workers):
 _worker_full_block = None
 _worker_name_to_idx = None
 _worker_hmms_dict = None
+_worker_optimized = None
 _worker_alphabet = None
 
 
 def _init_worker(hmm_path, alphabet_str, seq_fasta):
     """
-    Initialize worker: load HMMs and build full sequence block + index.
+    Initialize worker: load HMMs, build OptimizedProfiles, and build
+    full sequence block + index. Profile optimization happens once here
+    instead of on every hmmsearch call.
     """
     global _worker_full_block, _worker_name_to_idx
-    global _worker_hmms_dict, _worker_alphabet
+    global _worker_hmms_dict, _worker_optimized, _worker_alphabet
 
     if alphabet_str == "amino":
         _worker_alphabet = easel.Alphabet.amino()
@@ -386,9 +389,10 @@ def _init_worker(hmm_path, alphabet_str, seq_fasta):
     else:
         _worker_alphabet = easel.Alphabet.rna()
 
-    from hmm import load_hmms
+    from hmm import load_hmms, build_optimized_profiles
     all_hmms = load_hmms(hmm_path)
     _worker_hmms_dict = {h.name: h for h in all_hmms}
+    _worker_optimized = build_optimized_profiles(all_hmms, _worker_alphabet)
 
     _worker_full_block = build_sequence_block(seq_fasta, _worker_alphabet)
     _worker_name_to_idx = {
@@ -412,8 +416,8 @@ def _run_work_unit(args):
     """
     model_names, seq_names, Z, valid_pairs_list = args
 
-    needed_hmms = [_worker_hmms_dict[n] for n in model_names
-                   if n in _worker_hmms_dict]
+    needed_hmms = [_worker_optimized[n] for n in model_names
+                   if n in _worker_optimized]
 
     if not needed_hmms:
         return []
