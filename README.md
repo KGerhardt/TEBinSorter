@@ -148,6 +148,8 @@ Among REXdb's 3,253 clade-level differences, 83.6% involve `unknown` or `mixture
 
 GyDB shows more specific clade swaps (2,049 of 3,881 diffs), but these are likewise between sister clades: gammaretroviridae / epsilonretroviridae (362 reciprocal), sinbad / pao (189), Gypsy a_clade / b_clade (140 reciprocal). These are genuinely ambiguous classifications where the top models score nearly identically; the facet search routes through a slightly different model than exhaustive search, tipping a borderline call.
 
+The 1.8% that disagree at order+superfamily level (831 sequences) are 74.5% `unknown`/`mixture` resolution differences — one mode found enough domains to resolve an assignment that the other left ambiguous. The remaining 212 are genuine superfamily-level swaps, almost entirely within LTR (Gypsy / Retroviridae / Caulimoviridae) or cross-database conflicts (e.g. TIR-Ginger vs LTR-Pao). These arise from multi-database deconfliction where the same TE element hits different superfamilies in REXdb vs GyDB, and the winning call depends on which domain hits come through. Neither answer is definitively correct for these elements.
+
 ### SINE_SO: excluded by default
 
 The AnnoSINE database contains SINE_SO (M=4,176), an outlier model 6x larger than the next largest SINE model. Analysis of its contribution:
