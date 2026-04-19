@@ -145,12 +145,14 @@ def run_database_legacy(db_path, seq_block, db_name, conn):
     log.info(f"Loading HMMs from {db_name}")
     t0 = time.time()
     hmms = load_hmms(db_path)
+    from hmm import build_optimized_profiles
+    optimized = build_optimized_profiles(hmms)
     t1 = time.time()
-    log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
+    log.info(f"  Loaded and optimized {len(hmms)} models in {t1 - t0:.1f}s")
 
     log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
     t2 = time.time()
-    hits = legacy_search(hmms, seq_block)
+    hits = legacy_search(hmms, seq_block, optimized=optimized)
     t3 = time.time()
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 

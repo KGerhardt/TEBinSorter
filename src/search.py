@@ -141,7 +141,7 @@ def _partition_hmms_by_size(hmms):
     return normal, outliers
 
 
-def legacy_search(hmms, seq_block):
+def legacy_search(hmms, seq_block, optimized=None):
     """
     Legacy mode: single-pass search with bias filter OFF on all sequences
     against all models. Equivalent to TEsorter's --nobias behavior, just
@@ -151,15 +151,24 @@ def legacy_search(hmms, seq_block):
     (faster when models are similarly sized), outliers use parallel='targets'
     (avoids one huge model monopolizing a thread).
 
+    If optimized dict is provided, uses pre-built OptimizedProfiles for
+    faster searching (skips per-call profile optimization).
+
     Z is set to len(hmms) so E-values match hmmscan convention.
     """
     Z = len(hmms)
+
+    # Use optimized profiles if available, otherwise raw HMMs
+    def _get_search_objs(hmm_list):
+        if optimized:
+            return [optimized[h.name] for h in hmm_list if h.name in optimized]
+        return hmm_list
 
     # Single model: always use parallel=targets
     if len(hmms) == 1:
         log.info(f"    1 model (parallel=targets)")
         return _collect_hits(pyhmmer.hmmsearch(
-            hmms, seq_block,
+            _get_search_objs(hmms), seq_block,
             bias_filter=False,
             Z=Z, domZ=Z, E=1e10, domE=1e10,
             parallel="targets",
@@ -172,7 +181,7 @@ def legacy_search(hmms, seq_block):
     if normal:
         log.info(f"    {len(normal)} normal models (parallel=queries)")
         results_iter = pyhmmer.hmmsearch(
-            normal, seq_block,
+            _get_search_objs(normal), seq_block,
             bias_filter=False,
             Z=Z, domZ=Z, E=1e10, domE=1e10,
             parallel="queries",
@@ -185,7 +194,7 @@ def legacy_search(hmms, seq_block):
                  f"{', '.join(n[:40] for n in names[:3])}"
                  f"{'...' if len(names) > 3 else ''}")
         results_iter = pyhmmer.hmmsearch(
-            outliers, seq_block,
+            _get_search_objs(outliers), seq_block,
             bias_filter=False,
             Z=Z, domZ=Z, E=1e10, domE=1e10,
             parallel="targets",
