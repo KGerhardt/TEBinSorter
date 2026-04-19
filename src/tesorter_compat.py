@@ -237,12 +237,18 @@ def main():
                     export_classification_tsv(all_results, cls_out)
                     log.info(f"BLAST pass-2: {len(blast_cls)} additional -> {cls_out}")
 
-    # TODO: generate TEsorter-format output files:
-    # - {prefix}.dom.gff3 (domain GFF3)
-    # - {prefix}.dom.faa (domain protein sequences)
-    # - {prefix}.dom.tsv (domain hit summary)
-    # - {prefix}.cls.lib (RepeatMasker library, unless -nolib)
-    # - {prefix}.cls.pep (classified protein domains)
+    # Generate TEsorter-format output files
+    if config and results:
+        from tesorter_output import generate_all_outputs
+        all_cls = results + (blast_cls if not args.disable_pass2 and 'blast_cls' in dir() else [])
+        generate_all_outputs(
+            conn, prefix, db_arg, args.sequence,
+            aa_fasta if alphabet == AMINO_ALPHABET and args.seq_type == "nucl" else None,
+            nucl_lengths, all_cls,
+            seq_type=args.seq_type,
+            no_reverse=args.no_reverse,
+            no_library=args.no_library,
+        )
 
     t_end = time.time()
     log.info(f"Done in {t_end - t_start:.1f}s")
