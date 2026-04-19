@@ -96,22 +96,19 @@ Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results
 
 133,611 TE consensus sequences (concatenated filtered library), 10 processors, WSL2. The benchmark dataset is available on [Figshare](TODO: add DOI link after upload).
 
-#### Default mode (search only)
+#### Search timing: default vs facet mode
 
-All 5 databases, legacy search, no classification or BLAST pass-2:
+Full pipeline (HMM search + classification + BLAST pass-2) on 4 amino acid databases:
 
-| Database | Models | Alphabet | Search time |
-|----------|--------|----------|-------------|
-| REXdb | 266 | amino | ~17min |
-| GyDB | 314 | amino | ~20min |
-| LINE | 28 | amino | ~65s |
-| TIR | 17 | amino | ~54s |
-| SINE | 87 | DNA | ~11min |
-| **Total** | | | **~25min** |
+| Database | Models | Default | Facet | Speedup |
+|----------|--------|---------|-------|---------|
+| REXdb | 266 | 1001s | 488s | **2.1x** |
+| GyDB | 314 | 1272s | 926s | **1.4x** |
+| LINE | 28 | 66s | 76s | 0.9x |
+| TIR | 17 | 55s | 45s | 1.2x |
+| **Total wall clock** | | **42min 41s** | **26min 53s** | **1.6x** |
 
-#### Facet mode (full pipeline)
-
-4 amino acid databases, facet search + classification + BLAST pass-2:
+Facet mode per-stage breakdown:
 
 | Database | Facet screen | Verify | Cross-family | Legacy fallback | Total |
 |----------|-------------|--------|-------------|----------------|-------|
@@ -120,15 +117,32 @@ All 5 databases, legacy search, no classification or BLAST pass-2:
 | LINE (28) | 32s | 8s | 0s | 34s | 76s |
 | TIR (17) | 17s | 9s | 0s | 18s | 45s |
 
-| Pipeline stage | Time |
-|---------------|------|
-| Six-frame translation | 17s |
-| HMM search (4 databases) | 1535s |
-| Classification | 5s |
-| BLAST pass-2 | 38s |
-| **Total wall clock** | **26min 53s** |
+LINE and TIR have single-family databases, so no cross-family search is needed.
 
-46,324 sequences classified (34.7% of input). LINE and TIR have single-family databases, so no cross-family search is needed.
+#### Classification agreement: default vs facet mode
+
+46,464 sequences classified by default mode, 46,324 by facet mode (full pipeline including BLAST pass-2).
+
+| Metric | Count | % of common |
+|--------|-------|------------|
+| Sequences in both | 45,974 | — |
+| Exact match (order+superfamily+clade) | 42,396 | 92.2% |
+| Order+superfamily match | 45,143 | 98.2% |
+| Order match | 45,688 | 99.4% |
+| Order differs | 286 | 0.6% |
+| Default only | 490 | — |
+| Facet only | 350 | — |
+
+Per-database breakdown:
+
+| Database | Default | Facet | Common | Exact match | Default only | Facet only |
+|----------|---------|-------|--------|-------------|-------------|------------|
+| REXdb | 38,951 | 38,653 | 38,629 | 33,928 (87.8%) | 322 | 24 |
+| GyDB | 37,738 | 37,243 | 37,205 | 32,118 (86.3%) | 533 | 38 |
+| LINE | 151 | 147 | 147 | 138 (93.9%) | 4 | 0 |
+| TIR | 19,512 | 19,489 | 19,489 | 19,489 (100%) | 23 | 0 |
+
+Most classification differences are at the clade level within the same order and superfamily. These arise from the facet search landing on a different model within the same TE family, which can produce a different clade assignment during deconfliction. TIR classifications are identical between modes.
 
 ### SINE_SO: excluded by default
 
