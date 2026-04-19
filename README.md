@@ -135,14 +135,18 @@ LINE and TIR have single-family databases, so no cross-family search is needed.
 
 Per-database breakdown:
 
-| Database | Default | Facet | Common | Exact match | Default only | Facet only |
-|----------|---------|-------|--------|-------------|-------------|------------|
-| REXdb | 38,951 | 38,653 | 38,629 | 33,928 (87.8%) | 322 | 24 |
-| GyDB | 37,738 | 37,243 | 37,205 | 32,118 (86.3%) | 533 | 38 |
-| LINE | 151 | 147 | 147 | 138 (93.9%) | 4 | 0 |
-| TIR | 19,512 | 19,489 | 19,489 | 19,489 (100%) | 23 | 0 |
+| Database | Default | Facet | Common (%) | Exact match | Default only | Facet only |
+|----------|---------|-------|------------|-------------|-------------|------------|
+| REXdb | 38,951 | 38,653 | 38,629 (99.2%) | 33,928 (87.8%) | 322 | 24 |
+| GyDB | 37,738 | 37,243 | 37,205 (98.6%) | 32,118 (86.3%) | 533 | 38 |
+| LINE | 151 | 147 | 147 (97.4%) | 138 (93.9%) | 4 | 0 |
+| TIR | 19,512 | 19,489 | 19,489 (99.9%) | 19,489 (100%) | 23 | 0 |
 
-Most classification differences are at the clade level within the same order and superfamily. These arise from the facet search landing on a different model within the same TE family, which can produce a different clade assignment during deconfliction. TIR classifications are identical between modes.
+Most classification differences are at the clade level within the same order and superfamily. TIR classifications are identical between modes.
+
+Among REXdb's 3,253 clade-level differences, 83.6% involve `unknown` or `mixture` in one mode — cases where one search found enough domains to resolve a specific clade and the other did not. The remaining 16.4% (532) are swaps between closely related sister clades within the Gypsy chromo neighborhood (chromo-outgroup / Tcn1 / Selgy / Reina / Galadriel), where the top two model scores differ by only a few bits.
+
+GyDB shows more specific clade swaps (2,049 of 3,881 diffs), but these are likewise between sister clades: gammaretroviridae / epsilonretroviridae (362 reciprocal), sinbad / pao (189), Gypsy a_clade / b_clade (140 reciprocal). These are genuinely ambiguous classifications where the top models score nearly identically; the facet search routes through a slightly different model than exhaustive search, tipping a borderline call.
 
 ### SINE_SO: excluded by default
 
