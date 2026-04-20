@@ -161,6 +161,7 @@ def store_blast_hits(conn, hits, db_seq_to_dbs):
     Adds classified_by field indicating which databases classified
     each target sequence.
     """
+    # Indexes on blast_hits are built by results.finalize_db at end of run.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS blast_hits (
             qseqid      TEXT NOT NULL,
@@ -175,8 +176,6 @@ def store_blast_hits(conn, hits, db_seq_to_dbs):
             classified_by TEXT NOT NULL
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_blast_q ON blast_hits(qseqid)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_blast_s ON blast_hits(sseqid)")
 
     rows = []
     for h in hits:

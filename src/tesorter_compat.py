@@ -126,6 +126,7 @@ def main():
     from search import build_sequence_block, legacy_search
     from sequence import translate_fasta, open_input, clean_seq
     from results import (create_db, store_sequences, store_legacy, store_facet,
+                         index_hits_tables, finalize_db,
                          FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
                          FACET_STAGE_LEGACY_FALLBACK)
     from classifier import (classify_sequences, export_classification_tsv,
@@ -215,6 +216,9 @@ def main():
                 config = v
                 break
 
+    # Build hits-table indexes before the classification reads
+    index_hits_tables(conn)
+
     if config:
         hits_table = "facet_hits" if run_mode == "facet" else "legacy_hits"
         db_hits = load_hits(db_out, table=hits_table, database=db_arg)
@@ -257,6 +261,8 @@ def main():
             no_reverse=args.no_reverse,
             no_library=args.no_library,
         )
+
+    finalize_db(conn)
 
     t_end = time.time()
     log.info(f"Done in {t_end - t_start:.1f}s")

@@ -545,6 +545,9 @@ def store_classifications(conn, results, database=None, mode="default"):
     facet-mode classifications so both can coexist in a single
     companion database.
     """
+    # Indexes on this table are built by results.finalize_db at the end
+    # of the pipeline, not here — this function is called once per
+    # database inside the classification loop.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS classifications (
             seq_id      TEXT NOT NULL,
@@ -559,9 +562,6 @@ def store_classifications(conn, results, database=None, mode="default"):
             mode        TEXT NOT NULL DEFAULT 'default'
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_seq ON classifications(seq_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_db ON classifications(database)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_mode ON classifications(mode)")
 
     rows = [(r["id"], database, r["order"], r["superfamily"], r["clade"],
              r["complete"], r["strand"], r["domains"],

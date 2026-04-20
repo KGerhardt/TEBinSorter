@@ -50,25 +50,45 @@ CREATE TABLE IF NOT EXISTS legacy_hits (
     {_HIT_COLUMNS}
 );
 
-CREATE INDEX IF NOT EXISTS idx_leg_target ON legacy_hits(target_name);
-CREATE INDEX IF NOT EXISTS idx_leg_baseseq ON legacy_hits(base_seq);
-CREATE INDEX IF NOT EXISTS idx_leg_query ON legacy_hits(query_name);
-CREATE INDEX IF NOT EXISTS idx_leg_domain ON legacy_hits(domain_type);
-CREATE INDEX IF NOT EXISTS idx_leg_evalue ON legacy_hits(i_evalue);
-CREATE INDEX IF NOT EXISTS idx_leg_db ON legacy_hits(database);
-
 CREATE TABLE IF NOT EXISTS facet_hits (
     {_HIT_COLUMNS}
 );
-
-CREATE INDEX IF NOT EXISTS idx_fac_target ON facet_hits(target_name);
-CREATE INDEX IF NOT EXISTS idx_fac_baseseq ON facet_hits(base_seq);
-CREATE INDEX IF NOT EXISTS idx_fac_query ON facet_hits(query_name);
-CREATE INDEX IF NOT EXISTS idx_fac_domain ON facet_hits(domain_type);
-CREATE INDEX IF NOT EXISTS idx_fac_evalue ON facet_hits(i_evalue);
-CREATE INDEX IF NOT EXISTS idx_fac_db ON facet_hits(database);
-CREATE INDEX IF NOT EXISTS idx_fac_stage ON facet_hits(search_mode);
 """
+
+# Index creation is split by pipeline phase.
+#
+# _HITS_TABLE_INDEXES: built once the search phase finishes writing all
+#   HMM hits and before the deconfliction/classification phase begins.
+#   Those phases read from legacy_hits / facet_hits via filters on
+#   database / base_seq / domain_type, which benefit from an index.
+#
+# _FINAL_INDEXES: built at the very end of the pipeline, after
+#   classifications and blast_hits are fully populated. Neither table
+#   is read during pipeline execution; these indexes exist for post-run
+#   interactive analysis.
+_HITS_TABLE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_leg_target  ON legacy_hits(target_name)",
+    "CREATE INDEX IF NOT EXISTS idx_leg_baseseq ON legacy_hits(base_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_leg_query   ON legacy_hits(query_name)",
+    "CREATE INDEX IF NOT EXISTS idx_leg_domain  ON legacy_hits(domain_type)",
+    "CREATE INDEX IF NOT EXISTS idx_leg_evalue  ON legacy_hits(i_evalue)",
+    "CREATE INDEX IF NOT EXISTS idx_leg_db      ON legacy_hits(database)",
+    "CREATE INDEX IF NOT EXISTS idx_fac_target  ON facet_hits(target_name)",
+    "CREATE INDEX IF NOT EXISTS idx_fac_baseseq ON facet_hits(base_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_fac_query   ON facet_hits(query_name)",
+    "CREATE INDEX IF NOT EXISTS idx_fac_domain  ON facet_hits(domain_type)",
+    "CREATE INDEX IF NOT EXISTS idx_fac_evalue  ON facet_hits(i_evalue)",
+    "CREATE INDEX IF NOT EXISTS idx_fac_db      ON facet_hits(database)",
+    "CREATE INDEX IF NOT EXISTS idx_fac_stage   ON facet_hits(search_mode)",
+]
+
+_FINAL_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_cls_seq     ON classifications(seq_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cls_db      ON classifications(database)",
+    "CREATE INDEX IF NOT EXISTS idx_cls_mode    ON classifications(mode)",
+    "CREATE INDEX IF NOT EXISTS idx_blast_q     ON blast_hits(qseqid)",
+    "CREATE INDEX IF NOT EXISTS idx_blast_s     ON blast_hits(sseqid)",
+]
 
 # search_mode values within facet_hits: which stage produced the hit.
 # legacy_hits is a single, flat table of true default-mode output and
@@ -90,11 +110,61 @@ _INSERT_PLACEHOLDERS = ", ".join(["?"] * 26)
 
 
 def create_db(db_path):
-    """Create the results database with schema."""
+    """Create the results database with schema and bulk-insert tuning.
+
+    Indexes are NOT created here. Call finalize_db() at the end of the
+    pipeline to build them once on the fully-populated tables.
+    """
     conn = sqlite3.connect(db_path)
+    # WAL trades a tiny durability window (losing only the last transaction
+    # on a power cut) for much faster concurrent writes and amortized fsync.
+    # synchronous=NORMAL skips the inner fsync between WAL writes and
+    # leaves the one at checkpoint time; a rebuildable pipeline output
+    # does not need FULL.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    # 256 MB page cache — keeps the working set in memory during multi-
+    # million-row bulk inserts, avoiding constant fault-back from disk.
+    conn.execute("PRAGMA cache_size = -262144")
+    conn.execute("PRAGMA temp_store = MEMORY")
     conn.executescript(SCHEMA)
     conn.commit()
     return conn
+
+
+def index_hits_tables(conn):
+    """Build indexes on legacy_hits and facet_hits.
+
+    Call after the HMM search phase is complete (all hits written) and
+    before the classification/deconfliction phase begins. The subsequent
+    reads filter by database / base_seq / domain_type and benefit from
+    these indexes; inserts during the search phase do not.
+    """
+    for stmt in _HITS_TABLE_INDEXES:
+        conn.execute(stmt)
+    conn.commit()
+
+
+def finalize_db(conn):
+    """Build the remaining indexes and checkpoint the WAL.
+
+    Call once at the end of the pipeline, after classifications and
+    blast_hits are fully populated. Truncating the WAL into the main
+    database file leaves the output as a single self-contained .db with
+    no sidecar -wal file.
+
+    Tables classifications and blast_hits are created on-demand by
+    their writer functions; if a pipeline run skipped those phases
+    the table may not exist and its index is silently skipped.
+    """
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    for stmt in _FINAL_INDEXES:
+        target_table = stmt.split(" ON ", 1)[1].split("(", 1)[0].strip()
+        if target_table in tables:
+            conn.execute(stmt)
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
 def store_sequences(conn, nucl_lengths):

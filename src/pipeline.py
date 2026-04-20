@@ -14,6 +14,7 @@ from hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA
 from search import build_sequence_block, legacy_search
 from sequence import translate_fasta, open_input
 from results import (create_db, store_sequences, store_legacy, store_facet,
+                     index_hits_tables, finalize_db,
                      FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
                      FACET_STAGE_LEGACY_FALLBACK)
 from facet_classify import (facet_classify, facet_classify_v2,
@@ -373,6 +374,13 @@ def main():
             run_database_legacy(path, seq_block, name, conn, alphabet=alphabet)
             db_modes[name] = "default"
 
+    # Build hits-table indexes now that all HMM hits are written and
+    # before the classification phase starts reading from them.
+    log.info("Indexing hits tables")
+    t_idx0 = time.time()
+    index_hits_tables(conn)
+    log.info(f"  Indexed in {time.time() - t_idx0:.1f}s")
+
     # --- Classification ---
     log.info("--- Classification ---")
     from deconflict import load_hits
@@ -475,6 +483,12 @@ def main():
     #                                 nucl_lengths=nucl_lengths,
     #                                 table=hit_table)
     #         log.info(f"  Domain sequences: {dom_faa}")
+
+    # Build remaining indexes (classifications, blast_hits) and truncate WAL
+    log.info("Finalizing database")
+    t_fin0 = time.time()
+    finalize_db(conn)
+    log.info(f"  Finalized in {time.time() - t_fin0:.1f}s")
 
     t_end = time.time()
     log.info(f"Done in {t_end - t_start:.1f}s")
