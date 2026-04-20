@@ -18,7 +18,8 @@ from facet_classify import (facet_classify, facet_classify_v2,
                             export_classifications_tsv)
 from cross_family import find_missing_families, search_missing, search_missing_v2
 from classifier import (classify_sequences, export_classification_tsv,
-                       store_classifications, DB_CONFIGS)
+                       store_classifications, reconcile_classifications,
+                       DB_CONFIGS)
 from blast_pass2 import blast_pass2
 
 logging.basicConfig(
@@ -136,10 +137,19 @@ def parse_args():
              "comparison, replicating a TEsorter rounding bug. Use only for "
              "exact result reproduction against old TEsorter output.",
     )
+    parser.add_argument(
+        "--compat-tesorter-output",
+        action="store_true",
+        default=False,
+        help="Emit the combined .cls.tsv in TEsorter's 7-column format. "
+             "Default emits an 8th SecondaryHits column listing all "
+             "per-database classifications and their summed normalized "
+             "scores in descending order of evidence strength.",
+    )
     return parser.parse_args()
 
 
-def run_database_legacy(db_path, seq_block, db_name, conn):
+def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None):
     """
     Legacy mode: single-pass nobias search, all sequences against all models.
     """
@@ -147,7 +157,7 @@ def run_database_legacy(db_path, seq_block, db_name, conn):
     t0 = time.time()
     hmms = load_hmms(db_path)
     from hmm import build_optimized_profiles
-    optimized = build_optimized_profiles(hmms)
+    optimized = build_optimized_profiles(hmms, alphabet=alphabet)
     t1 = time.time()
     log.info(f"  Loaded and optimized {len(hmms)} models in {t1 - t0:.1f}s")
 
@@ -340,14 +350,14 @@ def main():
             log.info(f"  Classifications: {cls_tsv}")
         elif args.facet and alphabet == DNA_ALPHABET:
             log.info(f"  DNA database: using legacy search (facets AA-only)")
-            run_database_legacy(path, seq_block, name, conn)
+            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet)
         else:
-            run_database_legacy(path, seq_block, name, conn)
+            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet)
 
     # --- Classification ---
     log.info("--- Classification ---")
     from deconflict import load_hits
-    all_classifications = {}
+    per_db_results = {}
 
     for name in db_names:
         config = DB_CONFIGS.get(name)
@@ -363,17 +373,22 @@ def main():
         results = classify_sequences(hits, config,
                                      compat_rounding=args.compat_tesorter_rounding)
 
-        # Store as {seq_id: classification} for BLAST inheritance
-        for r in results:
-            all_classifications[r["id"]] = r
-
-        # Store and export per-database classification
+        # Store and export per-database classification (TEsorter format)
         store_classifications(conn, results, database=name)
         cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
         export_classification_tsv(results, cls_tsv)
         log.info(f"    {len(results)} classified -> {cls_tsv}")
 
+        per_db_results[name] = results
+
+    # Reconcile across databases via hierarchical weighted vote
+    reconciled = reconcile_classifications(per_db_results)
+    all_classifications = {r["id"]: r for r in reconciled}
+    log.info(f"  Reconciled across {len(per_db_results)} databases: "
+             f"{len(reconciled)} sequences")
+
     # --- BLAST pass-2 ---
+    all_results = list(reconciled)
     if not args.pass_1_only and all_classifications:
         log.info("--- BLAST pass-2 ---")
         blast_cls = blast_pass2(
@@ -386,12 +401,16 @@ def main():
 
         if blast_cls:
             store_classifications(conn, blast_cls, database="blast_pass2")
+            all_results = list(reconciled) + blast_cls
 
-            # Export combined classification
-            all_results = list(all_classifications.values()) + blast_cls
-            combined_tsv = os.path.join(outdir, f"{prefix}.cls.tsv")
-            export_classification_tsv(all_results, combined_tsv)
-            log.info(f"  Combined: {len(all_results)} classified -> {combined_tsv}")
+    # Export combined classification
+    if all_results:
+        combined_tsv = os.path.join(outdir, f"{prefix}.cls.tsv")
+        export_classification_tsv(
+            all_results, combined_tsv,
+            include_secondary=not args.compat_tesorter_output,
+        )
+        log.info(f"  Combined: {len(all_results)} classified -> {combined_tsv}")
 
     # TODO: rewrite exports with numpy for large datasets
     # Flat file exports temporarily disabled -- results are in the SQLite db

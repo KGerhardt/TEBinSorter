@@ -521,6 +521,8 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False)
         order, superfamily, max_clade, complete = classify_element(
             genes, clades, models, config)
 
+        total_norm_score = float(np.sum(hits["norm_score"][sorted_indices]))
+
         results.append({
             "id": base_seq,
             "order": order,
@@ -529,6 +531,7 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False)
             "complete": complete,
             "strand": strand,
             "domains": " ".join(domain_strs),
+            "score": total_norm_score,
         })
 
     log.info(f"  Classified: {len(results)} sequences")
@@ -565,13 +568,86 @@ def store_classifications(conn, results, database=None):
     conn.commit()
 
 
-def export_classification_tsv(results, out_path):
-    """Export classification results as TSV (TEsorter cls.tsv format)."""
+def export_classification_tsv(results, out_path, include_secondary=False):
+    """Export classification results as TSV.
+
+    Default format matches TEsorter cls.tsv (7 columns). If
+    include_secondary=True, appends a SecondaryHits column containing
+    per-database classifications and evidence scores in descending order.
+    """
     columns = ["#TE", "Order", "Superfamily", "Clade", "Complete",
                "Strand", "Domains"]
+    if include_secondary:
+        columns.append("SecondaryHits")
     with open(out_path, "w") as f:
         f.write("\t".join(columns) + "\n")
         for r in results:
             line = [r["id"], r["order"], r["superfamily"], r["clade"],
                     r["complete"], r["strand"], r["domains"]]
+            if include_secondary:
+                secondary = r.get("secondary") or []
+                if secondary:
+                    sec_str = ";".join(
+                        f"{db}:{o}/{sf}/{cl}={sc:.3f}"
+                        for db, o, sf, cl, sc in secondary
+                    )
+                else:
+                    sec_str = "."
+                line.append(sec_str)
             f.write("\t".join(line) + "\n")
+
+
+def reconcile_classifications(per_db_results):
+    """Reconcile per-database classifications via hierarchical weighted vote.
+
+    For each sequence classified by multiple databases, vote at each taxonomic
+    level in sequence (order -> superfamily -> clade), weighted by summed
+    normalized domain score per database. At each level, retain only entries
+    agreeing with the winning label before voting at the next level. The
+    primary database is the highest-scoring entry consistent with the full
+    hierarchical winner. All per-database calls are returned as secondary
+    hits sorted by evidence strength.
+
+    Args:
+        per_db_results: dict of {db_name: [result_dict, ...]} where each
+            result dict comes from classify_sequences and contains at least
+            id, order, superfamily, clade, score.
+
+    Returns:
+        list of dicts — one per sequence — with the primary result's fields
+        plus 'secondary': list of (db, order, superfamily, clade, score)
+        tuples sorted by score descending across every database that
+        classified this sequence.
+    """
+    by_seq = defaultdict(list)
+    for db_name, results in per_db_results.items():
+        for r in results:
+            by_seq[r["id"]].append((db_name, r))
+
+    def weighted_winner(entries, level):
+        totals = defaultdict(float)
+        for _, r in entries:
+            totals[r[level]] += r["score"]
+        return max(totals.items(), key=lambda kv: kv[1])[0]
+
+    reconciled = []
+    for seq_id, entries in by_seq.items():
+        pool = entries
+        for level in ("order", "superfamily", "clade"):
+            winner = weighted_winner(pool, level)
+            pool = [e for e in pool if e[1][level] == winner]
+
+        primary_db, primary_r = max(pool, key=lambda e: e[1]["score"])
+
+        secondary = [
+            (db, r["order"], r["superfamily"], r["clade"], r["score"])
+            for db, r in sorted(entries, key=lambda e: -e[1]["score"])
+        ]
+
+        reconciled.append({
+            **primary_r,
+            "primary_db": primary_db,
+            "secondary": secondary,
+        })
+
+    return reconciled
