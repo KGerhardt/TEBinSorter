@@ -119,36 +119,43 @@ Facet mode per-stage breakdown:
 
 LINE and TIR have single-family databases, so no cross-family search is needed.
 
+#### Cross-database reconciliation
+
+Each database classifies independently, then cross-database results are reconciled by a **hierarchical weighted vote** at order → superfamily → clade. At every level, per-database calls are weighted by the summed normalized domain score (dom_score / model_len) across that database's filtered hits. The winning (order, superfamily, clade) bucket elects its highest-scoring entry as the primary; every per-database call remains available in the combined output's new `SecondaryHits` column, formatted as `db:order/superfamily/clade=score` in descending order of evidence strength.
+
+Pass `--compat-tesorter-output` to emit the combined `.cls.tsv` in the original 7-column TEsorter format (primary only). Per-database `{prefix}.{db}.cls.tsv` files are always TEsorter-format.
+
 #### Classification agreement: default vs facet mode
 
-46,464 sequences classified by default mode, 46,324 by facet mode (full pipeline including BLAST pass-2).
+45,690 sequences classified by default mode, 46,324 by facet mode (full pipeline: HMM search → cross-database reconciliation → BLAST pass-2). The default run includes AnnoSINE (259 SINE-only classifications); facet mode is AA-only so those do not appear on its side.
 
 | Metric | Count | % of common |
 |--------|-------|------------|
-| Sequences in both | 45,974 | — |
-| Exact match (order+superfamily+clade) | 42,396 | 92.2% |
-| Order+superfamily match | 45,143 | 98.2% |
-| Order match | 45,688 | 99.4% |
-| Order differs | 286 | 0.6% |
-| Default only | 490 | — |
-| Facet only | 350 | — |
+| Sequences in both | 44,993 | — |
+| Exact match (order+superfamily+clade) | 40,282 | 89.5% |
+| Order+superfamily match | 43,547 | 96.8% |
+| Order match | 44,439 | 98.8% |
+| Order differs | 554 | 1.2% |
+| Default only | 697 | — |
+| Facet only | 1,331 | — |
 
-Per-database breakdown:
+Per-database breakdown (each database classified independently, before reconciliation):
 
 | Database | Default | Facet | Common (%) | Exact match | Default only | Facet only |
 |----------|---------|-------|------------|-------------|-------------|------------|
-| REXdb | 38,951 | 38,653 | 38,629 (99.2%) | 33,928 (87.8%) | 322 | 24 |
+| REXdb | 38,951 | 38,653 | 38,629 (99.2%) | 33,927 (87.8%) | 322 | 24 |
 | GyDB | 37,738 | 37,243 | 37,205 (98.6%) | 32,118 (86.3%) | 533 | 38 |
 | LINE | 151 | 147 | 147 (97.4%) | 138 (93.9%) | 4 | 0 |
 | TIR | 19,512 | 19,489 | 19,489 (99.9%) | 19,489 (100%) | 23 | 0 |
+| SINE | 259 | — | — | — | — | — |
 
-Most classification differences are at the clade level within the same order and superfamily. TIR classifications are identical between modes.
+TIR classifications are identical between modes. Overall, 4,711 combined-output rows disagree on the winning call; 3,265 of those (69.3%) are clade-only within the same order and superfamily, 892 are superfamily swaps within the same order, and 554 swap order.
 
-Among REXdb's 3,253 clade-level differences, 83.6% involve `unknown` or `mixture` in one mode — cases where one search found enough domains to resolve a specific clade and the other did not. The remaining 16.4% (532) are swaps between closely related sister clades within the Gypsy chromo neighborhood (chromo-outgroup / Tcn1 / Selgy / Reina / Galadriel), where the top two model scores differ by only a few bits.
+Of the clade-only differences, 67.3% involve an `unknown` or `mixture` call on one side — cases where one search found enough domains to resolve a specific clade and the other did not. The rest are swaps between closely related sister clades where the top two models score within a few bits: REXdb's Tcn1 ↔ chromo-outgroup (207 reciprocal) and Galadriel ↔ Reina (33) in the Gypsy chromo neighborhood; GyDB's gammaretroviridae ↔ epsilonretroviridae (362), pao ↔ sinbad (196), and Gypsy a_clade ↔ b_clade (140). At the per-database level REXdb's clade differences are 83.7% unknown/mixture resolution vs GyDB's 47.2% — GyDB's richer clade schema leaves more room for concrete-vs-concrete disagreement.
 
-GyDB shows more specific clade swaps (2,049 of 3,881 diffs), but these are likewise between sister clades: gammaretroviridae / epsilonretroviridae (362 reciprocal), sinbad / pao (189), Gypsy a_clade / b_clade (140 reciprocal). These are genuinely ambiguous classifications where the top models score nearly identically; the facet search routes through a slightly different model than exhaustive search, tipping a borderline call.
+Superfamily-level disagreements (892 sequences, all within the LTR order) are 59.3% `unknown`/`mixture` resolution. The remainder are genuine LTR-internal reassignments: Pao ↔ Bel-Pao (132), Gypsy ↔ Retrovirus (113), mixture ↔ Retroviridae (86). These arise when different databases register different LTR-element domain architectures that the hierarchical vote resolves differently under each search mode.
 
-The 1.8% that disagree at order+superfamily level (831 sequences) are 74.5% `unknown`/`mixture` resolution differences — one mode found enough domains to resolve an assignment that the other left ambiguous. The remaining 212 are genuine superfamily-level swaps, almost entirely within LTR (Gypsy / Retroviridae / Caulimoviridae) or cross-database conflicts (e.g. TIR-Ginger vs LTR-Pao). These arise from multi-database deconfliction where the same TE element hits different superfamilies in REXdb vs GyDB, and the winning call depends on which domain hits come through. Neither answer is definitively correct for these elements.
+Order-level disagreements (554 sequences, 1.2% of common) are dominated by LTR ↔ mixture (297) and LTR ↔ TIR (123). The TIR ↔ LTR transitions are residual Ginger cross-reactivity in sequences where the reconciliation's evidence totals are genuinely close — Ginger HMMs still hit real LTR retroelements, but the combined weight of rexdb + gydb LTR support normally outvotes them. These are genuinely borderline elements where neither answer is definitively correct.
 
 ### SINE_SO: excluded by default
 
