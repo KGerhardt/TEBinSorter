@@ -13,7 +13,9 @@ import time
 from hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
 from search import build_sequence_block, legacy_search
 from sequence import translate_fasta, open_input
-from results import create_db, store_sequences, store_legacy
+from results import (create_db, store_sequences, store_legacy, store_facet,
+                     FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
+                     FACET_STAGE_LEGACY_FALLBACK)
 from facet_classify import (facet_classify, facet_classify_v2,
                             export_classifications_tsv)
 from cross_family import find_missing_families, search_missing, search_missing_v2
@@ -149,9 +151,16 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None):
+def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
+                        facet_fallback=False):
     """
-    Legacy mode: single-pass nobias search, all sequences against all models.
+    Exhaustive single-pass nobias search against all models.
+
+    When facet_fallback=False (default), this is a true default-mode run and
+    hits go to legacy_hits. When True, this call is the DNA-alphabet branch
+    of a facet-mode run (facet mode is AA-only); those hits go to facet_hits
+    as a legacy-fallback-stage write so the facet and legacy tables stay
+    fully disjoint.
     """
     log.info(f"Loading HMMs from {db_name}")
     t0 = time.time()
@@ -167,7 +176,10 @@ def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None):
     t3 = time.time()
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
-    store_legacy(conn, hits, db_name, search_mode=2)
+    if facet_fallback:
+        store_facet(conn, hits, db_name, stage=FACET_STAGE_LEGACY_FALLBACK)
+    else:
+        store_legacy(conn, hits, db_name)
     return len(hits)
 
 
@@ -309,6 +321,10 @@ def main():
         nucl_block = build_sequence_block(args.sequence, DNA_ALPHABET)
         log.info(f"  Built nucleotide sequence block: {len(nucl_block)} sequences")
 
+    # Per-DB mode tracks which search path was taken; determines whether the
+    # classification step loads from legacy_hits or facet_hits.
+    db_modes = {}
+
     # Run each database
     for name in db_names:
         path = db_paths[name]
@@ -337,22 +353,25 @@ def main():
                      f"{len(f_verified)} verified, "
                      f"{len(f_cross)} cross-family, "
                      f"{len(f_legacy)} legacy hits in {t_f1 - t_f0:.1f}s")
-            # Store: 0=facet verified, 1=cross-family, 2=legacy fallback
             if f_verified:
-                store_legacy(conn, f_verified, name, search_mode=0)
+                store_facet(conn, f_verified, name, stage=FACET_STAGE_VERIFIED)
             if f_cross:
-                store_legacy(conn, f_cross, name, search_mode=1)
+                store_facet(conn, f_cross, name, stage=FACET_STAGE_CROSS_FAMILY)
             if f_legacy:
-                store_legacy(conn, f_legacy, name, search_mode=2)
-            # Export classifications
+                store_facet(conn, f_legacy, name, stage=FACET_STAGE_LEGACY_FALLBACK)
+            db_modes[name] = "facet"
+            # Export facet-tier classifications (facet-specific TSV)
             cls_tsv = os.path.join(outdir, f"{prefix}.{name}.classifications.tsv")
             export_classifications_tsv(classifications, cls_tsv)
             log.info(f"  Classifications: {cls_tsv}")
         elif args.facet and alphabet == DNA_ALPHABET:
             log.info(f"  DNA database: using legacy search (facets AA-only)")
-            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet)
+            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
+                                facet_fallback=True)
+            db_modes[name] = "facet"
         else:
             run_database_legacy(path, seq_block, name, conn, alphabet=alphabet)
+            db_modes[name] = "default"
 
     # --- Classification ---
     log.info("--- Classification ---")
@@ -365,16 +384,18 @@ def main():
             log.warning(f"  No classifier config for {name}, skipping")
             continue
 
-        hits = load_hits(db_path_out, table="legacy_hits", database=name)
+        mode = db_modes.get(name, "default")
+        hits_table = "facet_hits" if mode == "facet" else "legacy_hits"
+        hits = load_hits(db_path_out, table=hits_table, database=name)
         if hits is None:
             continue
 
-        log.info(f"  Classifying {name}")
+        log.info(f"  Classifying {name} ({mode} mode, {hits_table})")
         results = classify_sequences(hits, config,
                                      compat_rounding=args.compat_tesorter_rounding)
 
         # Store and export per-database classification (TEsorter format)
-        store_classifications(conn, results, database=name)
+        store_classifications(conn, results, database=name, mode=mode)
         cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
         export_classification_tsv(results, cls_tsv)
         log.info(f"    {len(results)} classified -> {cls_tsv}")
@@ -400,7 +421,9 @@ def main():
         )
 
         if blast_cls:
-            store_classifications(conn, blast_cls, database="blast_pass2")
+            run_mode = "facet" if args.facet else "default"
+            store_classifications(conn, blast_cls, database="blast_pass2",
+                                  mode=run_mode)
             all_results = list(reconciled) + blast_cls
 
     # Export combined classification

@@ -125,7 +125,9 @@ def main():
     from hmm import peek_alphabet, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
     from search import build_sequence_block, legacy_search
     from sequence import translate_fasta, open_input, clean_seq
-    from results import create_db, store_sequences, store_legacy
+    from results import (create_db, store_sequences, store_legacy, store_facet,
+                         FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
+                         FACET_STAGE_LEGACY_FALLBACK)
     from classifier import (classify_sequences, export_classification_tsv,
                             store_classifications, DB_CONFIGS)
     from blast_pass2 import blast_pass2
@@ -182,7 +184,7 @@ def main():
             n_workers=args.processors)
 
         if verified_hits:
-            store_legacy(conn, verified_hits, db_arg, search_mode=0)
+            store_facet(conn, verified_hits, db_arg, stage=FACET_STAGE_VERIFIED)
 
         # Cross-family
         hmms = load_hmms(db_path)
@@ -191,14 +193,18 @@ def main():
         if missing:
             cf_hits = search_missing(missing, hmms_dict, seq_block, alphabet)
             if cf_hits:
-                store_legacy(conn, cf_hits, db_arg, search_mode=1)
+                store_facet(conn, cf_hits, db_arg,
+                            stage=FACET_STAGE_CROSS_FAMILY)
 
         if legacy_hits:
-            store_legacy(conn, legacy_hits, db_arg, search_mode=2)
+            store_facet(conn, legacy_hits, db_arg,
+                        stage=FACET_STAGE_LEGACY_FALLBACK)
+        run_mode = "facet"
     else:
         hmms = load_hmms(db_path)
         hits = legacy_search(hmms, seq_block)
-        store_legacy(conn, hits, db_arg, search_mode=2)
+        store_legacy(conn, hits, db_arg)
+        run_mode = "default"
 
     # Classify
     config = DB_CONFIGS.get(db_arg)
@@ -210,10 +216,11 @@ def main():
                 break
 
     if config:
-        db_hits = load_hits(db_out, table="legacy_hits", database=db_arg)
+        hits_table = "facet_hits" if run_mode == "facet" else "legacy_hits"
+        db_hits = load_hits(db_out, table=hits_table, database=db_arg)
         if db_hits:
             results = classify_sequences(db_hits, config)
-            store_classifications(conn, results, database=db_arg)
+            store_classifications(conn, results, database=db_arg, mode=run_mode)
 
             # Export TEsorter-format cls.tsv
             cls_out = f"{prefix}.cls.tsv"
@@ -232,7 +239,8 @@ def main():
                 )
 
                 if blast_cls:
-                    store_classifications(conn, blast_cls, database="blast_pass2")
+                    store_classifications(conn, blast_cls, database="blast_pass2",
+                                          mode=run_mode)
                     all_results = results + blast_cls
                     export_classification_tsv(all_results, cls_out)
                     log.info(f"BLAST pass-2: {len(blast_cls)} additional -> {cls_out}")

@@ -538,8 +538,13 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False)
     return results
 
 
-def store_classifications(conn, results, database=None):
-    """Store classification results in SQLite."""
+def store_classifications(conn, results, database=None, mode="default"):
+    """Store classification results in SQLite.
+
+    The mode column discriminates default-mode classifications from
+    facet-mode classifications so both can coexist in a single
+    companion database.
+    """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS classifications (
             seq_id      TEXT NOT NULL,
@@ -550,19 +555,22 @@ def store_classifications(conn, results, database=None):
             complete    TEXT NOT NULL,
             strand      TEXT NOT NULL,
             domains     TEXT,
-            source      TEXT NOT NULL DEFAULT 'hmm'
+            source      TEXT NOT NULL DEFAULT 'hmm',
+            mode        TEXT NOT NULL DEFAULT 'default'
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_seq ON classifications(seq_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_db ON classifications(database)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cls_mode ON classifications(mode)")
 
     rows = [(r["id"], database, r["order"], r["superfamily"], r["clade"],
              r["complete"], r["strand"], r["domains"],
-             r.get("blast_source", "hmm") if "blast_source" in r else "hmm")
+             r.get("blast_source", "hmm") if "blast_source" in r else "hmm",
+             mode)
             for r in results]
 
     conn.executemany(
-        "INSERT INTO classifications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO classifications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
