@@ -11,7 +11,7 @@ from sequence import parse_frame_suffix, aa_to_nucl_coords, load_sequences_dict
 
 
 _HIT_COLUMNS = """
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          INTEGER PRIMARY KEY,
     database    TEXT NOT NULL,
     target_name TEXT NOT NULL,
     base_seq    TEXT NOT NULL,
