@@ -90,6 +90,17 @@ _FINAL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_blast_s     ON blast_hits(sseqid)",
 ]
 
+
+def _index_name(stmt):
+    # "CREATE INDEX IF NOT EXISTS <name>  ON <table>(<col>)"
+    after_exists = stmt.split("EXISTS", 1)[1].strip()
+    return after_exists.split()[0]
+
+
+_ALL_DEFERRED_INDEX_NAMES = [
+    _index_name(s) for s in (_HITS_TABLE_INDEXES + _FINAL_INDEXES)
+]
+
 # search_mode values within facet_hits: which stage produced the hit.
 # legacy_hits is a single, flat table of true default-mode output and
 # does not use this tag.
@@ -110,10 +121,15 @@ _INSERT_PLACEHOLDERS = ", ".join(["?"] * 26)
 
 
 def create_db(db_path):
-    """Create the results database with schema and bulk-insert tuning.
+    """Open or create the results database, apply bulk-insert tuning,
+    and drop any deferred indexes so subsequent inserts are not slowed
+    by per-row B-tree maintenance.
 
-    Indexes are NOT created here. Call finalize_db() at the end of the
-    pipeline to build them once on the fully-populated tables.
+    A reused database (a second pipeline invocation against the same
+    .db, e.g. writing a second mode into a companion file) still gets
+    the full benefit of deferred indexing: any indexes built by a
+    prior finalize_db are dropped here and rebuilt at the end of this
+    run via index_hits_tables + finalize_db.
     """
     conn = sqlite3.connect(db_path)
     # WAL trades a tiny durability window (losing only the last transaction
@@ -128,6 +144,8 @@ def create_db(db_path):
     conn.execute("PRAGMA cache_size = -262144")
     conn.execute("PRAGMA temp_store = MEMORY")
     conn.executescript(SCHEMA)
+    for name in _ALL_DEFERRED_INDEX_NAMES:
+        conn.execute(f"DROP INDEX IF EXISTS {name}")
     conn.commit()
     return conn
 
