@@ -2,7 +2,7 @@
 Main pipeline for TE classification.
 
 Orchestrates: FASTA ingestion -> alphabet detection -> optional translation
--> HMM search -> classification -> BLAST pass-2 -> SQLite + TSV output.
+-> HMM search -> classification -> minimap2 pass-2 -> SQLite + TSV output.
 """
 
 import argparse
@@ -24,6 +24,7 @@ from classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, reconcile_classifications,
                        DB_CONFIGS)
 from blast_pass2 import blast_pass2
+from minimap import minimap2_version
 
 logging.basicConfig(
     level=logging.INFO,
@@ -149,6 +150,38 @@ def parse_args():
              "per-database classifications and their summed normalized "
              "scores in descending order of evidence strength.",
     )
+
+    # minimap2 pass-2 options
+    parser.add_argument(
+        "-dp2", "--disable-pass2",
+        action="store_true", default=False,
+        help="Skip pass-2 similarity search (HMM-only classification)",
+    )
+    parser.add_argument(
+        "-rule", "--pass2-rule",
+        default="80-80-80", type=str, metavar="I-C-L",
+        help="Pass-2 threshold as identity-coverage-length. The coverage "
+             "value C is applied to BOTH qcov and tcov [default: %(default)s]",
+    )
+    parser.add_argument(
+        "--pass2-classified-fasta",
+        default=None, type=str, metavar="FASTA",
+        help="Optional FASTA of previously-classified elements to augment "
+             "the pass-2 target database. Headers must be like "
+             ">id#Order/Superfamily/Clade",
+    )
+    parser.add_argument(
+        "--minimap2-preset",
+        default="asm20", type=str, metavar="PRESET",
+        help="minimap2 -x preset [default: %(default)s]",
+    )
+    parser.add_argument(
+        "--minimap2-extra",
+        default="", type=str, metavar="STR",
+        help="Extra flags passed through to minimap2 (advanced) "
+             "[default: empty]",
+    )
+
     return parser.parse_args()
 
 
@@ -416,16 +449,35 @@ def main():
     log.info(f"  Reconciled across {len(per_db_results)} databases: "
              f"{len(reconciled)} sequences")
 
-    # --- BLAST pass-2 ---
+    # --- minimap2 pass-2 ---
     all_results = list(reconciled)
-    if not args.pass_1_only and all_classifications:
-        log.info("--- BLAST pass-2 ---")
+    if (not args.pass_1_only and not args.disable_pass2
+            and all_classifications):
+        try:
+            p2_id, p2_cov, p2_len = args.pass2_rule.split("-")
+            p2_id = float(p2_id)
+            p2_cov = float(p2_cov)
+            p2_len = float(p2_len)
+        except ValueError:
+            raise SystemExit(
+                f"--pass2-rule must be I-C-L (three numbers separated by '-'), "
+                f"got {args.pass2_rule!r}"
+            )
+
+        log.info("--- minimap2 pass-2 ---")
+        minimap2_version()
         blast_cls = blast_pass2(
             args.sequence, conn,
             hmm_classifications=all_classifications,
             seq_type="nucl",
             n_processors=args.processors,
+            min_identity=p2_id,
+            min_coverage=p2_cov,
+            min_length=p2_len,
             outdir=outdir,
+            pass2_classified_fasta=args.pass2_classified_fasta,
+            preset=args.minimap2_preset,
+            minimap2_extra=args.minimap2_extra,
         )
 
         if blast_cls:
