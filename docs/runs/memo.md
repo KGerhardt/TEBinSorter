@@ -264,3 +264,24 @@ Archived runs and summaries preserved at:
 - `/tmp/keep_mmseqs_dualcov_80_5k/` (mmseqs AND @ 80-80-80)
 - `/tmp/keep_minimap2_5k/` (minimap2 AND @ 80-80-80)
 - `/tmp/rape.summary.md` (most recent OR sweep, all four rule/tool combos)
+
+
+#######################################
+# Looks like we should use minimap2, no cigar and no cs strings (too costly on runtime).
+# Something like.
+minimap2 -x asm20 -k 15 -w 10 -p 0.2 -U 200,5000 -B 3 -O 4,18 --end-bonus 10 -z 400,200 --no-long-join -g 3000 -m 150 --paf-no-hit -t 200 -K 1G -o minimap2.paf TARGET.fa QUERY.fa
+# These are loosly benchmarked, but may benifit from being benchmarked against a wavefront goldstandard alignment dataset:
+nohup /usr/bin/time -v ./WFA_TEsorter -q QUERY.fa -t TARGET.fa --cigar --threads 20 > WFA.paf &
+# This will generate end-to-end alignment for all-vs-all, whcih will need post-processed to identify the single-best target for each query and filter down to only those subset of query target pairs that pass whatever rule (80-80-80, etc). 
+# This would make a good goldstandard set. 
+# I can eyeball human-readable goldstandard alignments to see if im comfortable with them:
+./WFA_TEsorter view --paf WFA.paf -q QUERY.fa -t TARGET.fa --qname 'chr1:15216993-15222304' --tname 'chr2:1122-3264#LTR/Copia/Bianca' --width 80
+# Note: ./WFA_TEsorter will take a long time, so QUERY.fa and TARGET.fa should be small (a subset).
+# Target can be the TSD-containing ones. Query can be the full candidate FASTA.
+# The PAF contains multiple lines for each q & t pair, so we need a script to merge them.
+# I have two candidate scripts for this purpose.
+# This script uses a more complicated (but probably more accurate) method to calculate pid. It also uses pass * pid * qcov * tcov to determine *best*. qcov and tcov are calculated identically between scripts.
+python3 classify_ltr_paf_fast.py minimap2.paf --min-pid 0.80 --min-qcov 0.80 --min-tcov 0.80 --header -o merged.tsv
+# This script uses a simpler approach to calculate pid, but it may not tip the scale in many cases. It uses pass * ident * min(qcov, tcov) to determine *best*. qcov and tcov are calculated identically between scripts. 
+python3 classify_final.py minimap2.paf --queries-fa QUERY.fa --qcov 0.80 --tcov 0.80 --ident 0.80 -o merged.tsv
+# Practically, they give the same output for most things. pronbably classify_ltr_paf_fast.py is perfered due to the pid calculation. 
