@@ -159,9 +159,11 @@ def parse_args():
     )
     parser.add_argument(
         "-rule", "--pass2-rule",
-        default="80-80-80", type=str, metavar="I-C-L",
-        help="Pass-2 threshold as identity-coverage-length. The coverage "
-             "value C is applied to BOTH qcov and tcov [default: %(default)s]",
+        default="70-70-70", type=str, metavar="I-C-L",
+        help="Pass-2 threshold as identity-coverage-length. I drives "
+             "classify_ltr_paf_fast --min-pid; C drives BOTH --min-qcov and "
+             "--min-tcov; L is parsed for grammar compatibility but is not "
+             "consumed by classify_ltr_paf_fast [default: %(default)s]",
     )
     parser.add_argument(
         "--pass2-classified-fasta",
@@ -169,11 +171,6 @@ def parse_args():
         help="Optional FASTA of previously-classified elements to augment "
              "the pass-2 target database. Headers must be like "
              ">id#Order/Superfamily/Clade",
-    )
-    parser.add_argument(
-        "--minimap2-preset",
-        default="asm20", type=str, metavar="PRESET",
-        help="minimap2 -x preset [default: %(default)s]",
     )
     parser.add_argument(
         "--minimap2-extra",
@@ -476,7 +473,6 @@ def main():
             min_length=p2_len,
             outdir=outdir,
             pass2_classified_fasta=args.pass2_classified_fasta,
-            preset=args.minimap2_preset,
             minimap2_extra=args.minimap2_extra,
         )
 

@@ -1,18 +1,15 @@
 """
 minimap.py — minimap2 wrapper for pass-2 similarity search.
 
-Unlike mmseqs `--search-type 3`, minimap2 emits multiple chained alignments per
-(query, target) pair, so we can legitimately union query- and target-side
-intervals across chains to compute both qcov and tcov. No 500 bp chain-gap
-heuristic needed: minimap2's own chaining already groups near-diagonal
-minimizer seeds, and each PAF row is one such chain. Across-chain union happens
-here, in Python.
+Pass-2 uses minimap2 with sensitivity-tuned flags chosen to maximize LTR-RT
+recall at moderate identity (benchmarked F1 ~0.90 at the 70-70-70 rule). The
+PAF is consumed by classify_ltr_paf_fast.process_paf, which groups chains per
+(query, target) pair, picks the best target per query, and emits one TSV row
+per query with pass/fail status under the user-supplied I-C-L rule.
 
-Filter semantics enforced by the consumer (blast_pass2.classify_from_blast):
-  identity ≥ I, qcov ≥ C, tcov ≥ C, length ≥ L   (from --pass2-rule I-C-L)
-
-where qcov = |union of aligned query intervals| / qlen and symmetrically for
-tcov.
+PAFRecord / parse_paf_besthit / besthit_per_query are kept for callers that
+still want chain-union best-hit semantics, but the live pass-2 pipeline no
+longer uses them.
 """
 
 import logging
@@ -46,22 +43,30 @@ def run_minimap2(query_fa, target_fa, paf_out, ncpu=4,
                  preset="asm20", extra="",
                  minimap2_bin="minimap2"):
     """
-    Run minimap2 and write PAF (with CIGAR / AS tags via -c).
+    Run minimap2 and write PAF.
 
-    Defaults:
-      -x {preset}    e.g. asm20 for ~20% divergence LTR-RTs
-      -c             emit CIGAR + AS:i: alignment score tag (needed for ranking)
-      -N 50          keep up to 50 secondary alignments per query
-      -p 0.1         accept secondaries down to 10% of primary score
-      --secondary=yes
-      -I 100G        don't split index (fine for LTR libraries up to a few GB)
+    Sensitivity-tuned flags for LTR-RT pass-2:
+      -x {preset}      base preset (default asm20 = ~20% divergence)
+      --rmq=no         disable repeat-mask query mode
+      --no-long-join   do not extend chains across long gaps
+      -k 10 -w 10      smaller k-mer / window than asm20 default
+      -r 500,20000     chain bandwidth bounds
+      -g 500           stop chain extension at 500 bp gap
+      -p 0.3           keep secondaries scoring >=30% of primary
+      -N 100           up to 100 secondaries per query
+      -m 30            min chaining score
+      -K 1G            large minibatch for throughput
+      --seed 11        deterministic seeding
+      --paf-no-hit     emit placeholder PAF lines for unmapped queries
       -t ncpu
     """
     os.makedirs(os.path.dirname(os.path.abspath(paf_out)) or ".", exist_ok=True)
 
     cmd = (
-        f"{minimap2_bin} -c -x {preset} -N 50 -p 0.1 --secondary=yes "
-        f"-I 100G -t {ncpu} {extra} "
+        f"{minimap2_bin} -x {preset} --rmq=no --no-long-join "
+        f"-k 10 -w 10 -r 500,20000 -g 500 -p 0.3 -N 100 -m 30 "
+        f"-t {ncpu} -K 1G --seed 11 --paf-no-hit "
+        f"{extra} "
         f"-o {paf_out} {target_fa} {query_fa}"
     )
     log.info(f"minimap2 cmd: {cmd}")

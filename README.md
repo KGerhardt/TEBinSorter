@@ -1,10 +1,10 @@
 # TEBinSorter_minimap2
 
 Fork of TEBinSorter with pass-2 similarity search swapped from `blastn` to
-[minimap2](https://github.com/lh3/minimap2). Unlike the `TEBinSorter_mmseqs`
-sibling, this port enforces **both query AND target coverage** meeting the
-pass-2 rule cutoff — matching the biological intent of "well-aligned on
-both sides" rather than blastn's query-side-only `qcovs` check.
+[minimap2](https://github.com/lh3/minimap2). Pass-2 runs minimap2 with a
+sensitivity-tuned flag set, then reduces the PAF to one row per query via
+`classify_ltr_paf_fast`, which enforces **identity, qcov, and tcov together**
+under the user-supplied I-C-L rule.
 
 ## Additional runtime dependency
 
@@ -21,44 +21,49 @@ Everything else is unchanged from TEBinSorter (pyhmmer, pyfastx, numpy).
 | Option | Default | Purpose |
 |---|---|---|
 | `-dp2`, `--disable-pass2` | off | Skip the minimap2 pass-2 (HMM-only classification) |
-| `-rule`, `--pass2-rule I-C-L` | `80-80-80` | Pass-2 threshold as identity-coverage-length. **C is applied to both qcov and tcov** (this is the semantic difference vs the mmseqs/blastn ports) |
+| `-rule`, `--pass2-rule I-C-L` | `70-70-70` | Pass-2 threshold. I drives `--min-pid`, C drives both `--min-qcov` and `--min-tcov`. L is parsed for grammar compatibility but is not consumed by `classify_ltr_paf_fast` |
 | `--pass2-classified-fasta FASTA` | none | Optional FASTA of prior classifications to augment the pass-2 target pool. Headers must be shaped `>id#Order/Superfamily/Clade` |
 | `--minimap2-preset PRESET` | `asm20` | Passed through as `minimap2 -x` |
 | `--minimap2-extra STR` | empty | Additional flags appended to the minimap2 command line |
 
-## Coverage semantics
+## minimap2 invocation
 
-For a query-target pair with multiple PAF chains, qcov and tcov are each
-computed as:
+Pass-2 runs (with target = previously-classified pool, query = HMM-unclassified):
 
 ```
-qcov = |union of aligned query intervals across all chains| / qlen
-tcov = |union of aligned target intervals across all chains| / tlen
+minimap2 -x asm20 --rmq=no --no-long-join \
+    -k 10 -w 10 -r 500,20000 -g 500 -p 0.3 -N 100 -m 30 \
+    -t NCPU -K 1G --seed 11 --paf-no-hit \
+    -o pass2.paf  TARGET.fa  QUERY.fa
 ```
 
-No chain-gap merge heuristic (unlike the mmseqs port's `_MAX_SPLIT_GAP=500`).
-minimap2's own chainer already groups near-diagonal minimizer seeds into
-chains; cross-chain union happens in Python and only counts uniquely
-aligned bases (gaps between chains are not counted as covered).
+The PAF is then collapsed by `classify_ltr_paf_fast` to one row per query:
 
-Rule passes only if **identity ≥ I, qcov ≥ C, tcov ≥ C, and aln length ≥ L**.
+```
+qname    pass/fail    pid    eff_qcov    eff_tcov    best_tname
+```
+
+A query is rescued (best target's classification inherited) iff the row
+reads `pass`, i.e. **pid ≥ I/100, eff_qcov ≥ C/100, eff_tcov ≥ C/100**.
+
+Benchmark at `70-70-70`: F1 ≈ 0.895, accuracy ≈ 0.943, precision ≈ 0.866,
+recall ≈ 0.926, MCC ≈ 0.857.
 
 ## SQLite schema
 
-The `blast_hits` table adds a `tcovs REAL NOT NULL` column (vs. the stock
-TEBinSorter and the mmseqs sibling port). Downstream (`classify_from_blast`)
-filters on both `qcovs` and `tcovs`. Other columns match the stock schema:
-`evalue`/`slen` are sentinel zeros since minimap2's AS-score and PAF format
-don't provide them directly.
+The `blast_hits` table stores one row per query (best target) with columns
+`qseqid, sseqid, pident, qcovs, tcovs, passes_rule, classified_by`. Indexes
+on `qseqid` and `sseqid` are still built by `results.finalize_db`.
 
 ## What changed vs stock TEBinSorter
 
 - `src/blast_pass2.py` — internals swapped from `blastn`+`multiprocessing.Pool`
-  to a single `minimap2 -c -x asm20 -N 50 -p 0.1` call. Added tcovs column;
-  `classify_from_blast` filters on both axes.
-- `src/minimap.py` — new. PAF parser with per-(query, target) union of query
-  and target intervals. Best-hit per query by minimap2 AS score.
-- `src/pass2_external.py` — new (shared with mmseqs port). Helpers for
+  to one `minimap2` call followed by `classify_ltr_paf_fast.process_paf`.
+- `src/minimap.py` — minimap2 wrapper with the sensitivity-tuned pass-2 flag
+  set (no `-c`; relies on PAF + `dv:f` only).
+- `src/classify_ltr_paf_fast.py` — PAF → TSV reducer (one row per query, with
+  pass/fail under the I-C-L rule).
+- `src/pass2_external.py` — shared with mmseqs port. Helpers for
   `--pass2-classified-fasta`.
 - `src/pipeline.py` / `src/tesorter_compat.py` — wire the five new CLI args
   through the pass-2 call.

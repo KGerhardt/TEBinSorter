@@ -2,17 +2,19 @@
 blast_pass2.py — minimap2-based pass-2 classification for HMM-unclassified
 sequences.
 
-Port of TEBinSorter's blastn-based pass-2 onto minimap2. Keeps the filename
-and public symbols (`blast_pass2`, `store_blast_hits`, `classify_from_blast`)
-so the rest of the pipeline doesn't care what aligner is behind them, but
-the SQLite `blast_hits` schema adds a `tcovs` column and the filter enforces
-both qcov AND tcov ≥ cutoff.
+Pipeline:
+  1. minimap2 (sensitivity-tuned flags from `minimap.run_minimap2`) writes a
+     PAF for the unclassified queries against the classified-pool target.
+  2. `classify_ltr_paf_fast.process_paf` reduces the PAF to one row per query:
+        qname  pass/fail  pid  eff_qcov  eff_tcov  best_tname
+     under the rule `--min-pid I  --min-qcov C  --min-tcov C` derived from
+     `--pass2-rule I-C-L`. (Per benchmarking, 70-70-70 is the recommended
+     default; the L value is parsed for backwards-compat with the I-C-L
+     grammar but is not consumed downstream.)
+  3. Each `pass` row inherits the target's order/superfamily/clade.
 
-Rule semantics for --pass2-rule I-C-L:
-    identity ≥ I%,  qcov ≥ C%,  tcov ≥ C%,  length ≥ L bp
-
-where qcov / tcov are unions of aligned intervals across ALL minimap2 chains
-for a given (query, target) pair, divided by qlen / tlen respectively.
+The SQLite `blast_hits` table is preserved for post-run introspection but the
+schema has been simplified to the columns classify_ltr_paf_fast emits.
 """
 
 import logging
@@ -25,18 +27,9 @@ import pyfastx
 
 import minimap
 import pass2_external
+from classify_ltr_paf_fast import process_paf, format_row
 
 log = logging.getLogger(__name__)
-
-
-# Developer toggle, deliberately not exposed on the CLI.
-#   True  -> require BOTH qcov AND tcov >= coverage threshold (strict).
-#   False -> require AT LEAST ONE of qcov, tcov >= coverage threshold
-#            (Wicker et al. 80-80-80 style: "candidate must cover ≥80% of
-#            at least one of the elements being compared").
-# minimap2 has no native coverage filter, so this is enforced post-hoc in
-# classify_from_blast's SQL WHERE clause.
-REQUIRE_BOTH_COVERAGE = False
 
 
 def _get_classified_ids(conn):
@@ -54,11 +47,9 @@ def _get_classified_ids(conn):
 
 def split_classified_unclassified(input_fasta, classified_ids, outdir,
                                   seq_type="nucl"):
-    """Split input into classified-pool FASTA and unclassified-query FASTA.
-
-    Nucleotide pools are uppercased and stripped of non-ATCG characters — not
-    because minimap2 requires it (it handles ambiguous bases) but to keep
-    invariants aligned with the mmseqs sibling port and make inputs clean.
+    """Split input into classified-pool FASTA (target) and unclassified-query
+    FASTA. Nucleotide pools are uppercased and stripped of non-ATCG to keep
+    inputs clean (minimap2 itself tolerates ambiguous bases).
     """
     os.makedirs(outdir, exist_ok=True)
     db_fasta = os.path.join(outdir, "blast_db.fa")
@@ -92,7 +83,7 @@ def split_classified_unclassified(input_fasta, classified_ids, outdir,
 
 def run_alignment(query_fa, target_fa, paf_out, ncpu=4,
                   preset="asm20", extra=""):
-    """Run minimap2 once with preset + -c so AS tags are available."""
+    """Run minimap2 with the sensitivity-tuned pass-2 flag set."""
     minimap.run_minimap2(
         query_fa=query_fa, target_fa=target_fa, paf_out=paf_out,
         ncpu=ncpu, preset=preset, extra=extra,
@@ -100,139 +91,113 @@ def run_alignment(query_fa, target_fa, paf_out, ncpu=4,
     return paf_out
 
 
-def parse_minimap2_output(paf_path):
-    """Parse PAF, union per (q,t), best-hit per query, return hit dicts."""
-    merged = minimap.parse_paf_besthit(paf_path)
-    best = minimap.besthit_per_query(merged)
+def classify_paf_to_tsv(paf_path, tsv_out, min_pid, min_qcov, min_tcov):
+    """Run classify_ltr_paf_fast over the PAF, write the TSV alongside,
+    and return the parsed rows: [(qname, pass_str, pid, qcov, tcov, best_tname), ...].
+    """
+    if not os.path.exists(paf_path) or os.path.getsize(paf_path) == 0:
+        return []
 
-    hits = []
-    for qid, m in best.items():
-        hits.append({
-            "qseqid": m["qseqid"],
-            "sseqid": m["sseqid"],
-            "pident": m["fident"] * 100.0,   # 0..100
-            "length": m["alnlen"],           # union of aligned query bases
-            "evalue": 0.0,                   # sentinel
-            "bitscore": float(m["score"]),   # minimap2 AS score
-            "qlen": m["qlen"],
-            "slen": m["tlen"],
-            "qcovs": m["qcov"] * 100.0,      # 0..100
-            "tcovs": m["tcov"] * 100.0,      # 0..100 (new column)
-        })
-    return hits
+    with open(paf_path) as fh:
+        rows = process_paf(
+            fh, min_pid=min_pid, min_qcov=min_qcov, min_tcov=min_tcov,
+            verbose=False,
+        )
+
+    with open(tsv_out, "w") as fh:
+        for row in rows:
+            fh.write(format_row(row) + "\n")
+
+    n_pass = sum(1 for r in rows if r[1] == "pass")
+    log.info(f"  classify_ltr_paf_fast: {n_pass}/{len(rows)} queries pass "
+             f"(min_pid={min_pid:.3f} min_qcov={min_qcov:.3f} "
+             f"min_tcov={min_tcov:.3f}) -> {tsv_out}")
+    return rows
 
 
-def store_blast_hits(conn, hits, db_seq_to_dbs):
-    """Store hits in SQLite. Adds a `tcovs` column vs. the stock schema."""
+def store_blast_hits(conn, tsv_rows, db_seq_to_dbs):
+    """Store classify_ltr_paf_fast rows in SQLite. One row per query."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS blast_hits (
-            qseqid      TEXT NOT NULL,
-            sseqid      TEXT NOT NULL,
-            pident      REAL NOT NULL,
-            length      INTEGER NOT NULL,
-            evalue      REAL NOT NULL,
-            bitscore    REAL NOT NULL,
-            qlen        INTEGER NOT NULL,
-            slen        INTEGER NOT NULL,
-            qcovs       REAL NOT NULL,
-            tcovs       REAL NOT NULL,
+            qseqid        TEXT NOT NULL,
+            sseqid        TEXT NOT NULL,
+            pident        REAL NOT NULL,
+            qcovs         REAL NOT NULL,
+            tcovs         REAL NOT NULL,
+            passes_rule   INTEGER NOT NULL,
             classified_by TEXT NOT NULL
         )
     """)
     rows = []
-    for h in hits:
-        dbs = db_seq_to_dbs.get(h["sseqid"], set())
+    for qname, pass_str, pid, qcov, tcov, tname in tsv_rows:
+        dbs = db_seq_to_dbs.get(tname, set())
         classified_by = ",".join(sorted(dbs)) if dbs else "unknown"
         rows.append((
-            h["qseqid"], h["sseqid"], h["pident"], h["length"],
-            h["evalue"], h["bitscore"], h["qlen"], h["slen"],
-            h["qcovs"], h["tcovs"], classified_by,
+            qname, tname,
+            pid * 100.0, qcov * 100.0, tcov * 100.0,
+            1 if pass_str == "pass" else 0,
+            classified_by,
         ))
     conn.executemany(
-        "INSERT INTO blast_hits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
+        "INSERT INTO blast_hits VALUES (?, ?, ?, ?, ?, ?, ?)", rows,
     )
     conn.commit()
-    log.info(f"  Stored {len(rows)} minimap2 hits")
+    log.info(f"  Stored {len(rows)} minimap2 best-hit rows")
 
 
-def classify_from_blast(conn, classifications, database=None,
-                        min_identity=80, min_coverage=80, min_length=80):
-    """Classify pass-2 rescues. Filters on BOTH qcovs and tcovs."""
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-    if "blast_hits" not in tables:
-        return []
-
-    if REQUIRE_BOTH_COVERAGE:
-        where = ("WHERE pident >= ? AND qcovs >= ? AND tcovs >= ? "
-                 "AND length >= ?")
-        params = [min_identity, min_coverage, min_coverage, min_length]
-    else:
-        # At-least-one-side coverage (Wicker et al. 80-80-80 interpretation)
-        where = ("WHERE pident >= ? AND (qcovs >= ? OR tcovs >= ?) "
-                 "AND length >= ?")
-        params = [min_identity, min_coverage, min_coverage, min_length]
-    log.info(f"  coverage mode: {'BOTH' if REQUIRE_BOTH_COVERAGE else 'AT-LEAST-ONE'} "
-             f"qcov/tcov >= {min_coverage}")
-    if database:
-        where += " AND classified_by LIKE ?"
-        params.append(f"%{database}%")
-
-    rows = conn.execute(f"""
-        SELECT qseqid, sseqid, pident, qcovs, tcovs, length, bitscore
-        FROM blast_hits
-        {where}
-        ORDER BY bitscore DESC
-    """, params).fetchall()
-
+def classify_from_blast(tsv_rows, classifications):
+    """Inherit order/superfamily/clade for queries whose best target passed
+    the rule. `classifications` maps target_id -> classification dict.
+    """
     classified_set = set(classifications.keys())
-    best = {}
-    for qid, sid, pident, qcovs, tcovs, length, bitscore in rows:
-        if qid in classified_set:
-            continue
-        if qid not in best:
-            best[qid] = (sid, pident, qcovs, tcovs, length, bitscore)
-
     new_classifications = []
     no_source = 0
-    for qid, (sid, pident, qcovs, tcovs, length, bitscore) in best.items():
-        if sid in classifications:
-            source = classifications[sid]
-            new_classifications.append({
-                "id": qid,
-                "order": source["order"],
-                "superfamily": source["superfamily"],
-                "clade": "unknown",
-                "complete": "none",
-                "strand": "?",
-                "domains": "none",
-                "blast_source": sid,
-                "blast_pident": pident,
-                "blast_qcovs": qcovs,
-                "blast_tcovs": tcovs,
-                "blast_bitscore": bitscore,
-            })
-        else:
+    n_pass = 0
+    for qname, pass_str, pid, qcov, tcov, tname in tsv_rows:
+        if pass_str != "pass":
+            continue
+        n_pass += 1
+        if qname in classified_set:
+            continue
+        if tname not in classifications:
             no_source += 1
+            continue
+        source = classifications[tname]
+        new_classifications.append({
+            "id": qname,
+            "order": source["order"],
+            "superfamily": source["superfamily"],
+            "clade": source.get("clade", "unknown"),
+            "complete": "none",
+            "strand": "?",
+            "domains": "none",
+            "blast_source": tname,
+            "blast_pident": pid * 100.0,
+            "blast_qcovs": qcov * 100.0,
+            "blast_tcovs": tcov * 100.0,
+            "blast_bitscore": 0.0,
+        })
 
     if no_source:
         log.info(f"    {no_source} pass-2 hits to unclassified targets (skipped)")
-
     log.info(f"  pass-2: {len(new_classifications)} sequences classified "
-             f"(from {len(best)} hits passing filters)")
+             f"(from {n_pass} rule-passing queries)")
     return new_classifications
 
 
 def blast_pass2(input_fasta, conn, hmm_classifications=None,
                 seq_type="nucl", n_processors=4,
-                min_identity=80, min_coverage=80, min_length=80,
+                min_identity=70, min_coverage=70, min_length=70,
                 outdir=None,
                 pass2_classified_fasta=None,
                 preset="asm20", minimap2_extra=""):
-    """minimap2-based pass-2. Public signature mirrors sibling ports.
+    """minimap2-based pass-2.
 
-    min_coverage is applied to BOTH qcov and tcov.
+    Args:
+      min_identity: I from --pass2-rule I-C-L (percent, e.g. 70)
+      min_coverage: C from --pass2-rule I-C-L (percent, applied to qcov AND tcov)
+      min_length:   L from --pass2-rule I-C-L (parsed for backwards-compat
+                    with the I-C-L grammar, not consumed by classify_ltr_paf_fast)
     """
     t0 = time.time()
     minimap.check_minimap2()
@@ -282,6 +247,7 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
         return []
 
     paf_out = os.path.join(work, "pass2.paf")
+    tsv_out = os.path.join(work, "pass2.tsv")
 
     log.info(f"  Running minimap2 -x {preset} with {n_processors} threads")
     t1 = time.time()
@@ -292,20 +258,19 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
     t2 = time.time()
     log.info(f"  minimap2 alignment: {t2 - t1:.1f}s")
 
-    hits = parse_minimap2_output(paf_out)
-    log.info(f"  {len(hits)} best-hit records after per-pair union of PAF chains")
+    min_pid = min_identity / 100.0
+    min_cov = min_coverage / 100.0
+    tsv_rows = classify_paf_to_tsv(
+        paf_out, tsv_out,
+        min_pid=min_pid, min_qcov=min_cov, min_tcov=min_cov,
+    )
 
-    if hits:
-        store_blast_hits(conn, hits, db_seq_to_dbs)
+    if tsv_rows:
+        store_blast_hits(conn, tsv_rows, db_seq_to_dbs)
 
     log.info(f"  {len(hmm_classifications)} HMM classifications available for inheritance")
 
-    new_cls = classify_from_blast(
-        conn, hmm_classifications,
-        min_identity=min_identity,
-        min_coverage=min_coverage,
-        min_length=min_length,
-    )
+    new_cls = classify_from_blast(tsv_rows, hmm_classifications)
 
     t3 = time.time()
     log.info(f"  minimap2 pass-2 total: {t3 - t0:.1f}s")

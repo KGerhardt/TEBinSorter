@@ -285,3 +285,31 @@ python3 classify_ltr_paf_fast.py minimap2.paf --min-pid 0.80 --min-qcov 0.80 --m
 # This script uses a simpler approach to calculate pid, but it may not tip the scale in many cases. It uses pass * ident * min(qcov, tcov) to determine *best*. qcov and tcov are calculated identically between scripts. 
 python3 classify_final.py minimap2.paf --queries-fa QUERY.fa --qcov 0.80 --tcov 0.80 --ident 0.80 -o merged.tsv
 # Practically, they give the same output for most things. pronbably classify_ltr_paf_fast.py is perfered due to the pid calculation. 
+
+
+#########################################
+# I implemented above ideas. 
+# 'TEBinSorter/src/WFA_best_per_query.py' converts 'WFA_TEsorter' outputs to classify TSV format (WFA.tsv). 
+# Here are the best parameters:
+./minimap2/minimap2 -x asm20 --rmq=no --no-long-join -k 10 -w 10 -r 500,20000 -g 500 -p 0.3 -N 100 -m 30 -t 5 -K 1G --seed 11 --paf-no-hit -o minimap2.paf TARGET.fa QUERY.fa 
+# Evaluate perfomance.
+python TEBINsorter/eval.py --gold WFA.tsv --pred minimap2.paf
+{
+  "label": "",
+  "total": 5556,
+  "TP": 1339,
+  "TN": 3903,
+  "FP": 207,
+  "FN": 107,
+  "accuracy": 0.943485,
+  "precision": 0.866106,
+  "recall": 0.926003,
+  "f1": 0.895053,
+  "mcc": 0.857339,
+  "tp_agree": 754,
+  "tp_disagree": 585,
+  "tp_agree_frac": 0.563107,
+  "missing_from_pred": 2729,
+  "extras": 223
+}
+[eval] out.tsv F1=0.8951 acc=0.9435 P=0.8661 R=0.9260 MCC=0.8573 TP=1339 TN=3903 FP=207 FN=107 agree=754/1339 miss=2729 extra=223

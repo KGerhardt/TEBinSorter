@@ -8,8 +8,11 @@
 // (query). To produce SAM/PAF-compliant CIGAR and cs strings (where 'I'
 // consumes query and 'D' consumes target), we invert I<->D when serialising.
 //
-// Build (one line):
-//   g++ -O3 -std=c++17 -fopenmp -Wall -I./WFA2-lib WFA_TEsorter.cpp -o WFA_TEsorter -L./WFA2-lib/build -Wl,-rpath,'$ORIGIN/WFA2-lib/build' -lwfa2cpp -lwfa2 -lpthread -lm
+// Build (one line; static-linked against WFA2-lib so the binary has no
+// runtime libwfa2*.so dependency). Run from this src/ directory; assumes
+// WFA2-lib sits two levels up as a sibling of TEBinSorter/. Adjust the
+// -I and .a paths if your layout differs.
+//   g++ -O3 -std=c++17 -fopenmp -Wall -I../../WFA2-lib WFA_TEsorter.cpp -o WFA_TEsorter ../../WFA2-lib/build/libwfa2cpp.a ../../WFA2-lib/build/libwfa2.a -lpthread -lm
 
 #include <algorithm>
 #include <atomic>
