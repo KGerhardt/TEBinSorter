@@ -152,6 +152,7 @@ def parse_paf_line(line, lineno, strict=False):
             "qlen": int(fields[1]),
             "qstart": int(fields[2]),
             "qend": int(fields[3]),
+            "strand": fields[4],
             "tname": fields[5],
             "tlen": int(fields[6]),
             "tstart": int(fields[7]),
@@ -164,10 +165,62 @@ def parse_paf_line(line, lineno, strict=False):
         return None
 
 
-def compute_pair_metrics(alignments, qlen, tlen):
+def chained_intervals(alignments, max_gap=5000, gap_tol=0.20):
+    """Group alignments into colinear chains; return per-chain (q,t) envelopes.
+
+    Two adjacent alignments (sorted by qstart) join the same chain iff:
+      1. Same strand.
+      2. t-order consistent with strand (ascending t for +, descending t for -).
+      3. Inner gap on each axis <= max_gap (bp).
+      4. |q_gap - t_gap| / max(q_gap, t_gap) <= gap_tol  (synchronized indel).
+    Otherwise a new chain begins.
+
+    Returns ([(qmin, qmax), ...], [(tmin, tmax), ...]) -- one (q,t) envelope per
+    chain. Multiple chains may overlap on q or t; the caller is responsible for
+    merging across chains.
+    """
+    if not alignments:
+        return [], []
+    alns = sorted(alignments, key=lambda a: (a["qstart"], a["qend"]))
+    chains = [[alns[0]]]
+    for nxt in alns[1:]:
+        cur = chains[-1][-1]
+        join = cur["strand"] == nxt["strand"]
+        if join:
+            if cur["strand"] == "+":
+                t_order_ok = nxt["tstart"] >= cur["tstart"]
+                t_gap = max(0, nxt["tstart"] - cur["tend"])
+            else:
+                t_order_ok = nxt["tstart"] <= cur["tstart"]
+                t_gap = max(0, cur["tstart"] - nxt["tend"])
+            join = t_order_ok
+        if join:
+            q_gap = max(0, nxt["qstart"] - cur["qend"])
+            big = max(q_gap, t_gap)
+            if big > max_gap:
+                join = False
+            elif big > 0 and abs(q_gap - t_gap) / big > gap_tol:
+                join = False
+        if join:
+            chains[-1].append(nxt)
+        else:
+            chains.append([nxt])
+    q_ivs, t_ivs = [], []
+    for chain in chains:
+        q_ivs.append((min(a["qstart"] for a in chain),
+                      max(a["qend"] for a in chain)))
+        t_ivs.append((min(a["tstart"] for a in chain),
+                      max(a["tend"] for a in chain)))
+    return q_ivs, t_ivs
+
+
+def compute_pair_metrics(alignments, qlen, tlen,
+                         fill_colinear=False, max_gap=5000, gap_tol=0.20):
     """Compute (pid, eff_qcov, eff_tcov) for one (q,t) pair, span-based.
 
     `alignments` is a non-empty list of dicts: {qstart, qend, tstart, tend, div}.
+    If fill_colinear is True, colinear-chain inner gaps on q and t are bridged
+    in the qcov/tcov computation (pid logic is unchanged either way).
     """
     # Build per-alignment span intervals (no CIGAR -- one interval each).
     for a in alignments:
@@ -219,15 +272,24 @@ def compute_pair_metrics(alignments, qlen, tlen):
     pid = (1.0 - total_unique_mut / total_unique_len) if total_unique_len > 0 else 0.0
 
     # eff_qcov, eff_tcov: union of all alignment spans (use ALL alignments,
-    # not just survivors -- encompassed ones add nothing new anyway).
-    all_q_iv = [iv for a in alignments for iv in a["q_iv"]]
-    all_t_iv = [iv for a in alignments for iv in a["t_iv"]]
-    eff_qcov = interval_total(merge_intervals(all_q_iv)) / qlen if qlen > 0 else 0.0
-    eff_tcov = interval_total(merge_intervals(all_t_iv)) / tlen if tlen > 0 else 0.0
+    # not just survivors -- encompassed ones add nothing new anyway). When
+    # fill_colinear is on, inner gaps within colinear chains are bridged before
+    # the union so a single element fragmented into HSPs counts as one span.
+    if fill_colinear:
+        q_chains, t_chains = chained_intervals(
+            alignments, max_gap=max_gap, gap_tol=gap_tol)
+        eff_qcov = interval_total(merge_intervals(q_chains)) / qlen if qlen > 0 else 0.0
+        eff_tcov = interval_total(merge_intervals(t_chains)) / tlen if tlen > 0 else 0.0
+    else:
+        all_q_iv = [iv for a in alignments for iv in a["q_iv"]]
+        all_t_iv = [iv for a in alignments for iv in a["t_iv"]]
+        eff_qcov = interval_total(merge_intervals(all_q_iv)) / qlen if qlen > 0 else 0.0
+        eff_tcov = interval_total(merge_intervals(all_t_iv)) / tlen if tlen > 0 else 0.0
     return pid, eff_qcov, eff_tcov
 
 
-def process_paf(lines, min_pid=0.70, min_qcov=0.70, min_tcov=0.70, verbose=False):
+def process_paf(lines, min_pid=0.70, min_qcov=0.70, min_tcov=0.70,
+                fill_colinear=False, max_gap=5000, gap_tol=0.20, verbose=False):
     """Stream PAF lines, group by (qname,tname), pick best target per query,
     return [(qname, pass_str, pid, qcov, tcov, best_tname), ...] sorted by qname.
     """
@@ -257,7 +319,9 @@ def process_paf(lines, min_pid=0.70, min_qcov=0.70, min_tcov=0.70, verbose=False
     per_query = defaultdict(list)
     for (qname, tname), alns in pair_alns.items():
         qlen, tlen = pair_lengths[(qname, tname)]
-        pid, qcov, tcov = compute_pair_metrics(alns, qlen, tlen)
+        pid, qcov, tcov = compute_pair_metrics(
+            alns, qlen, tlen,
+            fill_colinear=fill_colinear, max_gap=max_gap, gap_tol=gap_tol)
         passes = (pid >= min_pid) and (qcov >= min_qcov) and (tcov >= min_tcov)
         per_query[qname].append({
             "tname": tname,
@@ -305,6 +369,15 @@ def main():
     ap.add_argument("--min-pid", type=float, default=0.70)
     ap.add_argument("--min-qcov", type=float, default=0.70)
     ap.add_argument("--min-tcov", type=float, default=0.70)
+    ap.add_argument("--fill-colinear-gaps", action="store_true",
+                    help="bridge inner gaps within colinear HSP chains "
+                         "(same strand, q-order matches t-order, q-gap ~ t-gap) "
+                         "before computing eff_qcov/eff_tcov. Off by default.")
+    ap.add_argument("--bridge-max-gap", type=int, default=5000,
+                    help="max inner gap (bp) to bridge on either axis (default: 5000).")
+    ap.add_argument("--bridge-gap-tol", type=float, default=0.20,
+                    help="max relative mismatch |q_gap - t_gap| / max(q_gap, t_gap) "
+                         "to treat as a synchronized indel (default: 0.20).")
     ap.add_argument("--header", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
@@ -317,6 +390,8 @@ def main():
         results = process_paf(
             in_fh,
             min_pid=args.min_pid, min_qcov=args.min_qcov, min_tcov=args.min_tcov,
+            fill_colinear=args.fill_colinear_gaps,
+            max_gap=args.bridge_max_gap, gap_tol=args.bridge_gap_tol,
             verbose=args.verbose,
         )
     finally:

@@ -101,6 +101,7 @@ def classify_paf_to_tsv(paf_path, tsv_out, min_pid, min_qcov, min_tcov):
     with open(paf_path) as fh:
         rows = process_paf(
             fh, min_pid=min_pid, min_qcov=min_qcov, min_tcov=min_tcov,
+            fill_colinear=True,
             verbose=False,
         )
 
