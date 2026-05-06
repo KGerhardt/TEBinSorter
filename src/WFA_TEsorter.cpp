@@ -10,9 +10,9 @@
 //
 // Build (one line; static-linked against WFA2-lib so the binary has no
 // runtime libwfa2*.so dependency). Run from this src/ directory; assumes
-// WFA2-lib sits two levels up as a sibling of TEBinSorter/. Adjust the
-// -I and .a paths if your layout differs.
-//   g++ -O3 -std=c++17 -fopenmp -Wall -I../../WFA2-lib WFA_TEsorter.cpp -o WFA_TEsorter ../../WFA2-lib/build/libwfa2cpp.a ../../WFA2-lib/build/libwfa2.a -lpthread -lm
+// WFA2-lib sits at ./WFA2-lib with build/ already populated (libwfa2.a,
+// libwfa2cpp.a). Adjust the -I and .a paths if your layout differs.
+//   g++ -O3 -std=c++17 -fopenmp -Wall -I./WFA2-lib WFA_TEsorter.cpp -o WFA_TEsorter ./WFA2-lib/build/libwfa2cpp.a ./WFA2-lib/build/libwfa2.a -lpthread -lm
 
 #include <algorithm>
 #include <atomic>
@@ -122,6 +122,71 @@ static string revcomp(const string& s) {
     out.resize(s.size());
     for (size_t i = 0; i < s.size(); ++i) out[s.size() - 1 - i] = comp_base(s[i]);
     return out;
+}
+
+// ---------- IUPAC nucleotide matching ----------------------------------------
+//
+// Each base is encoded as a 4-bit mask over {A=1, C=2, G=4, T=8}. Two bases
+// "match" iff their masks share at least one bit, i.e. their possible-base
+// sets intersect. Examples: A vs W={A,T} -> match; W vs S={C,G} -> mismatch;
+// N matches everything; anything not in IUPAC has mask 0 and matches nothing.
+// Used by the WFA lambda-match path (alignEnd2End / alignEndsFree /
+// alignExtension lambda overloads) so the wavefront treats IUPAC-compatible
+// positions as exact matches rather than mismatches.
+
+static uint8_t g_base_mask[256];      // [byte] -> 4-bit base set
+static uint8_t g_iupac_match[65536];  // [(qbyte<<8)|tbyte] -> 0/1 match flag
+
+static void init_iupac_tables() {
+    static bool inited = false;
+    if (inited) return;
+    inited = true;
+    for (int i = 0; i < 256; ++i) g_base_mask[i] = 0;
+    auto set_pair = [](char up, char lo, uint8_t m) {
+        g_base_mask[(unsigned char)up] = m;
+        g_base_mask[(unsigned char)lo] = m;
+    };
+    set_pair('A','a', 0x1);
+    set_pair('C','c', 0x2);
+    set_pair('G','g', 0x4);
+    set_pair('T','t', 0x8);
+    set_pair('U','u', 0x8);          // RNA U == T
+    set_pair('R','r', 0x1|0x4);      // A|G
+    set_pair('Y','y', 0x2|0x8);      // C|T
+    set_pair('S','s', 0x2|0x4);      // C|G
+    set_pair('W','w', 0x1|0x8);      // A|T
+    set_pair('K','k', 0x4|0x8);      // G|T
+    set_pair('M','m', 0x1|0x2);      // A|C
+    set_pair('B','b', 0x2|0x4|0x8);      // C|G|T
+    set_pair('D','d', 0x1|0x4|0x8);      // A|G|T
+    set_pair('H','h', 0x1|0x2|0x8);      // A|C|T
+    set_pair('V','v', 0x1|0x2|0x4);      // A|C|G
+    set_pair('N','n', 0xF);              // any
+    for (int a = 0; a < 256; ++a) {
+        for (int b = 0; b < 256; ++b) {
+            g_iupac_match[(a << 8) | b] = (g_base_mask[a] & g_base_mask[b]) ? 1 : 0;
+        }
+    }
+}
+
+static inline bool iupac_compatible(char a, char b) {
+    return g_iupac_match[((unsigned char)a << 8) | (unsigned char)b] != 0;
+}
+
+// Context passed to the WFA lambda match callback.
+struct LambdaCtx {
+    const char* pattern;   // query bytes, [0, plen)
+    const char* text;      // target bytes, [0, tlen)
+};
+
+// WFA calls this for each (v=pattern_pos, h=text_pos) probed during extension.
+// Return non-zero iff the two bases are IUPAC-compatible; WFA then treats the
+// position as a match (no penalty). The indices are guaranteed in-range by
+// the caller (see wavefront_sequences_cmp), so no bounds check needed.
+static int iupac_match_funct(int v, int h, void* args) {
+    auto* ctx = static_cast<LambdaCtx*>(args);
+    return g_iupac_match[((unsigned char)ctx->pattern[v] << 8)
+                       | (unsigned char)ctx->text[h]];
 }
 
 // ---------- alignment op-string utilities -------------------------------------
@@ -299,6 +364,7 @@ struct Opts {
     MemMode mem     = MemMode::High;
     bool has_min_score = false;
     int min_score   = 0;
+    bool iupac      = false;
     bool verbose    = false;
 };
 
@@ -329,8 +395,14 @@ static void usage_align(FILE* f = stderr) {
 "      --strand STR       both|forward|reverse (default: both)\n"
 "      --memory STR       high|med|low|ultralow (default: high)\n"
 "      --min-score N      drop alignments with WFA score < N (default: keep all)\n"
+"      --iupac            treat IUPAC-compatible bases as matches (e.g. A==W,\n"
+"                         W==N, R==G). Off by default; turn on to align\n"
+"                         consensus sequences carrying ambiguity codes. Uses\n"
+"                         WFA's lambda-match path, which is slower than the\n"
+"                         default literal-byte kernel.\n"
 "      --pairs FILE       restrict to (qname<TAB>tname) pairs from FILE\n"
 "                         (default: full all-vs-all over the FASTAs)\n"
+"                         Self-pairs (qname == tname) are always skipped.\n"
 "      --threads N        worker threads (default: 1)\n"
 "\n"
 "Misc:\n"
@@ -382,6 +454,7 @@ static Opts parse_align_opts(int argc, char** argv) {
         {"memory",     required_argument, nullptr, 11 },
         {"min-score",  required_argument, nullptr, 12 },
         {"pairs",      required_argument, nullptr, 13 },
+        {"iupac",      no_argument,       nullptr, 14 },
         {"verbose",    no_argument,       nullptr, 'v'},
         {"help",       no_argument,       nullptr, 'h'},
         {nullptr, 0, nullptr, 0}
@@ -405,6 +478,7 @@ static Opts parse_align_opts(int argc, char** argv) {
             case 11 : o.mem     = parse_mem(optarg); break;
             case 12 : o.has_min_score = true; o.min_score = std::atoi(optarg); break;
             case 13 : o.pairs_path = optarg; break;
+            case 14 : o.iupac = true; break;
             case 'v': o.verbose = true; break;
             case 'h': usage_align(stdout); std::exit(0);
             default : usage_align(stderr); std::exit(2);
@@ -445,12 +519,28 @@ struct AlnResult {
 // trailing runs of WFA 'I' ops (free target-end skips) are stripped from `ops`
 // and accounted for in tstart/tend. For extension mode qend/tend reflect the
 // actual bases consumed by the partial alignment.
+//
+// When `iupac` is true, the lambda-match overloads are used so that bases
+// connected by IUPAC ambiguity codes (e.g. W vs A) score as matches rather
+// than mismatches. The lambda path bypasses the SIMD/64-bit-block extension
+// kernel and is therefore slower than the default literal-byte path.
 static AlnResult align_one(wfa::WFAlignerGapAffine& aligner, AlnMode mode,
-                           const string& q, const string& t) {
+                           const string& q, const string& t, bool iupac) {
     AlnResult r;
     int qlen = (int)q.size(), tlen = (int)t.size();
     wfa::WFAligner::AlignmentStatus st;
-    if (mode == AlnMode::End2End) {
+    if (iupac) {
+        LambdaCtx ctx{q.data(), t.data()};
+        if (mode == AlnMode::End2End) {
+            st = aligner.alignEnd2End(iupac_match_funct, &ctx, qlen, tlen);
+        } else if (mode == AlnMode::EndsFree) {
+            st = aligner.alignEndsFree(iupac_match_funct, &ctx,
+                                       qlen, 0, 0,
+                                       tlen, tlen, tlen);
+        } else {
+            st = aligner.alignExtension(iupac_match_funct, &ctx, qlen, tlen);
+        }
+    } else if (mode == AlnMode::End2End) {
         st = aligner.alignEnd2End(q, t);
     } else if (mode == AlnMode::EndsFree) {
         // Query-anchored semi-global: query is anchored, target ends are free.
@@ -514,12 +604,15 @@ static PafRec make_paf(const string& qname, const string& q_oriented, int qlen_f
 static int run_align(int argc, char** argv) {
     Opts o = parse_align_opts(argc, argv);
 
+    if (o.iupac) init_iupac_tables();
+
     if (o.verbose) cerr << "[INFO] reading FASTAs\n";
     auto queries = read_fasta(o.query_path);
     auto targets = read_fasta(o.target_path);
     if (o.verbose) {
         cerr << "[INFO] " << queries.size() << " query seqs, "
-             << targets.size() << " target seqs\n";
+             << targets.size() << " target seqs"
+             << (o.iupac ? " (IUPAC-aware matching)" : "") << "\n";
     }
 
     // Output sink
@@ -556,7 +649,7 @@ static int run_align(int argc, char** argv) {
             cerr << "[ERROR] cannot open --pairs file: " << o.pairs_path << "\n";
             return 1;
         }
-        size_t miss_q = 0, miss_t = 0, parsed = 0;
+        size_t miss_q = 0, miss_t = 0, parsed = 0, skipped_self = 0;
         string line;
         while (std::getline(pin, line)) {
             if (line.empty() || line[0] == '#') continue;
@@ -569,6 +662,7 @@ static int run_align(int argc, char** argv) {
             size_t tab2 = rest.find('\t');
             string tn = (tab2 == string::npos) ? rest : rest.substr(0, tab2);
             ++parsed;
+            if (qn == tn) { ++skipped_self; continue; }
             auto qit = q_idx.find(qn);
             auto tit = t_idx.find(tn);
             if (qit == q_idx.end()) { ++miss_q; continue; }
@@ -578,6 +672,7 @@ static int run_align(int argc, char** argv) {
         if (o.verbose) {
             cerr << "[INFO] --pairs parsed=" << parsed
                  << " kept=" << pair_jobs.size()
+                 << " skipped-self=" << skipped_self
                  << " missing-qname=" << miss_q
                  << " missing-tname=" << miss_t << "\n";
         }
@@ -587,9 +682,21 @@ static int run_align(int argc, char** argv) {
         }
     }
 
+    // Pre-count self-pairs in the all-vs-all matrix so the progress total
+    // reflects only the alignments we'll actually run.
+    size_t self_pairs_avs = 0;
+    if (pair_jobs.empty()) {
+        std::unordered_map<string,int> tname_counts;
+        tname_counts.reserve(targets.size() * 2);
+        for (const auto& T : targets) ++tname_counts[T.name];
+        for (const auto& Q : queries) {
+            auto it = tname_counts.find(Q.name);
+            if (it != tname_counts.end()) self_pairs_avs += (size_t)it->second;
+        }
+    }
     std::atomic<size_t> done{0};
     const size_t total = pair_jobs.empty()
-        ? queries.size() * targets.size()
+        ? (queries.size() * targets.size() - self_pairs_avs)
         : pair_jobs.size();
     auto t_start = std::chrono::steady_clock::now();
 
@@ -598,15 +705,20 @@ static int run_align(int argc, char** argv) {
         const FastaRec& Q = queries[qi];
         const FastaRec& T = targets[ti];
         if (Q.seq.empty() || T.seq.empty()) { ++done; return; }
+        // Skip self-alignments: a sequence aligned to itself yields no useful
+        // information and is wasted compute (typical case: all-vs-all over a
+        // single FASTA loaded as both --query and --target). These are
+        // pre-excluded from `total`, so do not increment `done` here.
+        if (Q.name == T.name) return;
 
         AlnResult res_f, res_r;
         string qrev;
         if (o.strand == Strand::Forward || o.strand == Strand::Both) {
-            res_f = align_one(aligner, o.mode, Q.seq, T.seq);
+            res_f = align_one(aligner, o.mode, Q.seq, T.seq, o.iupac);
         }
         if (o.strand == Strand::Reverse || o.strand == Strand::Both) {
             qrev = revcomp(Q.seq);
-            res_r = align_one(aligner, o.mode, qrev, T.seq);
+            res_r = align_one(aligner, o.mode, qrev, T.seq, o.iupac);
         }
 
         bool emit_f = false, emit_r = false;
@@ -816,7 +928,12 @@ static void print_pretty(ostream& os,
             if (op == 'M' || op == '=' || op == 'X') {
                 char qc = q_aln[qi++], tc = t_aln[ti++];
                 qline += qc; tline += tc;
-                bool match = (qc == tc) && (op != 'X');
+                // For legacy 'M' (match-or-mismatch), use IUPAC compatibility
+                // so consensus bases like W vs A are drawn as matches when the
+                // alignment was produced under --iupac. Pure ACGT pairs reduce
+                // to literal equality.
+                bool match = (op == '=') ||
+                             (op == 'M' && iupac_compatible(qc, tc));
                 mline += match ? '|' : ' ';
             } else if (op == 'I') {     // query has extra base (gap in target)
                 qline += q_aln[qi++]; tline += '-'; mline += ' ';
@@ -870,6 +987,8 @@ static void print_pretty(ostream& os,
 
 static int run_view(int argc, char** argv) {
     ViewOpts v = parse_view_opts(argc, argv);
+
+    init_iupac_tables();
 
     auto qs = read_fasta(v.query_path);
     auto ts = read_fasta(v.target_path);
