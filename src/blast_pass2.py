@@ -191,7 +191,8 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
                 min_identity=70, min_coverage=70, min_length=70,
                 outdir=None,
                 pass2_classified_fasta=None,
-                preset="asm20", minimap2_extra=""):
+                preset="asm20", minimap2_extra="",
+                aligner="minimap2"):
     """minimap2-based pass-2.
 
     Args:
@@ -201,7 +202,8 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
                     with the I-C-L grammar, not consumed by classify_ltr_paf_fast)
     """
     t0 = time.time()
-    minimap.check_minimap2()
+    if aligner == "minimap2":
+        minimap.check_minimap2()
 
     if seq_type != "nucl":
         log.warning("minimap2 pass-2 only supports nucleotide sequences; "
@@ -246,6 +248,21 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
     if os.path.getsize(db_fasta) == 0:
         log.info("  pass-2 target FASTA is empty; skipping minimap2")
         return []
+
+    if aligner == "blast":
+        import blast_backend
+        new_cls = blast_backend.run_pass2_blast(
+            qry_fasta=qry_fasta, db_fasta=db_fasta, conn=conn,
+            classifications=hmm_classifications,
+            db_seq_to_dbs=db_seq_to_dbs,
+            n_processors=n_processors,
+            min_identity=min_identity,
+            min_coverage=min_coverage,
+            min_length=min_length,
+            work=work,
+        )
+        log.info(f"  blast pass-2 total: {time.time() - t0:.1f}s")
+        return new_cls
 
     paf_out = os.path.join(work, "pass2.paf")
     tsv_out = os.path.join(work, "pass2.tsv")

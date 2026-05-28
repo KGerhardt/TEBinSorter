@@ -178,6 +178,15 @@ def parse_args():
         help="Extra flags passed through to minimap2 (advanced) "
              "[default: empty]",
     )
+    parser.add_argument(
+        "--pass2-aligner",
+        choices=["minimap2", "blast"], default="minimap2",
+        help="Aligner for the pass-2 similarity search. 'minimap2' (default) "
+             "uses the PAF qcov+tcov path; 'blast' reproduces TEBinSorter "
+             "master's blastn pass-2 (qcovs + alignment-length filter, "
+             "clade=unknown). Both share the same -rule and the "
+             "--pass2-classified-fasta external-pool merge.",
+    )
 
     return parser.parse_args()
 
@@ -461,8 +470,9 @@ def main():
                 f"got {args.pass2_rule!r}"
             )
 
-        log.info("--- minimap2 pass-2 ---")
-        minimap2_version()
+        log.info(f"--- pass-2 ({args.pass2_aligner}) ---")
+        if args.pass2_aligner == "minimap2":
+            minimap2_version()
         blast_cls = blast_pass2(
             args.sequence, conn,
             hmm_classifications=all_classifications,
@@ -474,6 +484,7 @@ def main():
             outdir=outdir,
             pass2_classified_fasta=args.pass2_classified_fasta,
             minimap2_extra=args.minimap2_extra,
+            aligner=args.pass2_aligner,
         )
 
         if blast_cls:
