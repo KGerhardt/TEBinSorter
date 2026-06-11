@@ -118,17 +118,26 @@ def parse_bath_tblout(tblout_path):
       +14 bias  ...
 
     BATH 2.0 prepends a numeric "hit ID" column (base=1) and inserts a PID
-    column after bias; BATH 1.x has neither (base=0). The PID column only
-    shifts shifts/stops, which we do not consume, so detecting `base` from the
-    leading hit-ID is enough to support both formats.
+    column after bias; BATH 1.x has neither (base=0). We never read past +14
+    (bias), so the differing trailing columns are irrelevant -- only `base`
+    matters. `base` is read once from the column-name header line, which is
+    always emitted: it starts with "hit ID" for 2.0 and "target name" for 1.x.
+    (Detecting `base` from the data rows would be ambiguous: a purely-numeric
+    target name -- e.g. an Ensembl chromosome "1" -- is indistinguishable from
+    a 2.0 numeric hit-ID.)
     """
     hits = []
+    base = 0
     with open(tblout_path) as f:
         for line in f:
             if line.startswith("#"):
+                header = line.lstrip("#").split()
+                if header[:2] == ["hit", "ID"]:
+                    base = 1
+                elif header[:2] == ["target", "name"]:
+                    base = 0
                 continue
             p = line.split()
-            base = 1 if p and p[0].isdigit() else 0
             if len(p) < base + 15:
                 continue
 
@@ -186,15 +195,21 @@ def run_and_parse(hmm_path, nucl_fasta, db_name, n_workers=4, outdir=None,
     """Resolve the BATH HMM, run bathsearch, and return parsed hit dicts."""
     bath_hmm = resolve_bath_db(hmm_path, db_name=db_name)
 
+    tmp_tblout = None
     if outdir:
         os.makedirs(outdir, exist_ok=True)
         tblout = os.path.join(outdir, f"{db_name}.bath.tblout")
     else:
         fd, tblout = tempfile.mkstemp(suffix=".bath.tblout")
         os.close(fd)
+        tmp_tblout = tblout
 
-    run_bathsearch(bath_hmm, nucl_fasta, tblout, n_workers=n_workers,
-                   frameshift=frameshift)
-    hits = parse_bath_tblout(tblout)
+    try:
+        run_bathsearch(bath_hmm, nucl_fasta, tblout, n_workers=n_workers,
+                       frameshift=frameshift)
+        hits = parse_bath_tblout(tblout)
+    finally:
+        if tmp_tblout and os.path.exists(tmp_tblout):
+            os.remove(tmp_tblout)
     log.info(f"  BATH: {len(hits)} hits for {db_name}")
     return hits
