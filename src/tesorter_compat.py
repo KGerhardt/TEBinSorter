@@ -223,7 +223,10 @@ def main():
         hits_table = "facet_hits" if run_mode == "facet" else "legacy_hits"
         db_hits = load_hits(db_out, table=hits_table, database=db_arg)
         if db_hits:
-            results = classify_sequences(db_hits, config)
+            # Drop-in TEsorter mode: keep raw domain-count clade voting so
+            # output matches TEsorter exactly. The score-weighted vote is the
+            # default only in the main pipeline.py CLI.
+            results = classify_sequences(db_hits, config, compat_voting=True)
             store_classifications(conn, results, database=db_arg, mode=run_mode)
 
             # Export TEsorter-format cls.tsv
