@@ -4,6 +4,8 @@ Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter)
 
 Most differences in TESorter replication are the result of small bugfixes in TEBinSorter.
 
+Note: I should switch from default task (megablast) to dc-megablast. 
+
 ## How it works
 
 TEsorter classifies transposable elements by searching translated sequences against HMM profile databases using HMMER's `hmmscan` with `--nobias`. This disables fast filtering for every sequence-model comparison, making the vast majority of runtime a waste: obvious non-hits are screened at full cost so that a handful of true positives aren't missed.
