@@ -42,7 +42,11 @@ def run_blast_chunk(query_chunk, db_fasta, output, seq_type="nucl", ncpu=1):
     app = "blastn" if seq_type == "nucl" else "blastp"
     outfmt = ("6 qseqid sseqid pident length mismatch gapopen qstart qend "
               "sstart send evalue bitscore qlen slen qcovs qcovhsp sstrand")
-    cmd = (f"{app} -query {query_chunk} -db {db_fasta} -out {output} "
+    # dc-megablast (discontiguous megablast) is more sensitive than the blastn
+    # default (megablast) for divergent/cross-species TE matches. The -task value
+    # is blastn-only; blastp would reject it, so gate it on the blastn branch.
+    task = " -task dc-megablast" if app == "blastn" else ""
+    cmd = (f"{app}{task} -query {query_chunk} -db {db_fasta} -out {output} "
            f"-outfmt '{outfmt}' -num_threads {ncpu}")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if result.returncode != 0:
