@@ -24,6 +24,7 @@ from classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, reconcile_classifications,
                        DB_CONFIGS)
 from blast_pass2 import blast_pass2
+import bath_search
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,6 +83,28 @@ def parse_args():
         help="Search against all known databases",
     )
     parser.add_argument(
+        "--genome",
+        action="store_true",
+        default=False,
+        help="Genome mode: input is genome sequence(s). Windows the genome, "
+             "detects TE protein domains throughout, classifies each domain "
+             "individually, and emits a domain-level GFF3 + summary table "
+             "(no per-element .cls.tsv, no BLAST pass-2). Works with the "
+             "default HMMER engine and with --bath.",
+    )
+    parser.add_argument(
+        "--win-size",
+        type=float,
+        default=1e6,
+        help="Genome mode: window size for chunking [default: 1e6]",
+    )
+    parser.add_argument(
+        "--win-ovl",
+        type=float,
+        default=1e5,
+        help="Genome mode: window overlap [default: 1e5]",
+    )
+    parser.add_argument(
         "--facet",
         action="store_true",
         default=False,
@@ -123,6 +146,26 @@ def parse_args():
         default=False,
         help="Emit routed FASTA partitions for the BATH aligner. "
              "Output goes to {outdir}/BATHwater/ directory.",
+    )
+    parser.add_argument(
+        "--bath",
+        action="store_true",
+        default=False,
+        help="Use the BATH aligner (frameshift-aware translated nucleotide "
+             "search) instead of pyhmmer/HMMER for amino-acid databases. "
+             "Runs bathsearch --fs on the raw nucleotide input (no six-frame "
+             "translation). DNA databases (AnnoSINE) always use HMMER. "
+             "Set BATH_BIN_DIR if bathsearch/bathconvert are not on the "
+             "default path.",
+    )
+    parser.add_argument(
+        "--compat-tesorter-voting",
+        action="store_true",
+        default=False,
+        help="Decide the clade by raw domain-count plurality, replicating "
+             "TEsorter exactly. Default is a score-weighted clade vote (summed "
+             "normalized domain score), which resolves sibling-clade swaps that "
+             "TEsorter breaks arbitrarily on tied vote counts.",
     )
     parser.add_argument(
         "--include-sine-so",
@@ -251,6 +294,16 @@ def run_database(db_path, seq_block, seq_fasta, db_name, alphabet, conn,
 def main():
     args = parse_args()
 
+    if args.bath and args.facet:
+        raise SystemExit(
+            "--bath and --facet are incompatible: facet mode is pyhmmer-only. "
+            "Run BATH without --facet.")
+
+    if args.genome and args.facet:
+        raise SystemExit(
+            "--genome and --facet are incompatible: facet mode is element-level. "
+            "Run genome mode without --facet.")
+
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
     outdir = args.outdir or f"{input_base}.TEBinSorter"
@@ -290,6 +343,18 @@ def main():
             any_nucl = True
         log.info(f"  {name}: {alphabet}, translate={'yes' if alphabet == AMINO_ALPHABET else 'no'}")
 
+    # Genome mode: dispatch to the domain-level genome scanner and stop here.
+    # It windows the genome, finds/classifies each TE protein domain, and emits
+    # a GFF3 + summary -- no element classification, reconcile, or BLAST pass-2.
+    if args.genome:
+        import genome
+        log.info("Genome mode")
+        genome.run_genome(
+            args.sequence, db_paths, db_alphabets, outdir, prefix,
+            use_bath=args.bath, n_workers=args.processors,
+            win_size=args.win_size, win_ovl=args.win_ovl)
+        return
+
     # Create results database
     conn = create_db(db_path_out)
 
@@ -300,9 +365,12 @@ def main():
     store_sequences(conn, nucl_lengths)
     log.info(f"Input: {len(nucl_lengths)} sequences")
 
-    # Translate if any database needs amino acid sequences
+    # Translate if any database needs amino acid sequences. Under --bath the
+    # amino-acid databases are searched by bathsearch directly against the
+    # nucleotide input (frameshift-aware translated search), so no six-frame
+    # translation is needed for them.
     aa_block = None
-    if any_amino:
+    if any_amino and not args.bath:
         # Remove stale index if present
         for f in [aa_fasta + ".fxi"]:
             if os.path.exists(f):
@@ -342,7 +410,15 @@ def main():
 
         two_pass = args.two_pass or args.pass_1_only or args.emit_bath
 
-        if args.facet and alphabet != DNA_ALPHABET:
+        if args.bath and alphabet == AMINO_ALPHABET:
+            t_b0 = time.time()
+            hits = bath_search.run_and_parse(
+                path, args.sequence, name,
+                n_workers=args.processors, outdir=outdir)
+            store_legacy(conn, hits, name)
+            db_modes[name] = "default"
+            log.info(f"  BATH search: {len(hits)} hits in {time.time() - t_b0:.1f}s")
+        elif args.facet and alphabet != DNA_ALPHABET:
             t_f0 = time.time()
             classifications, f_verified, f_cross, f_legacy = facet_classify_v2(
                 path, seq_block, seq_fasta, alphabet,
@@ -400,7 +476,8 @@ def main():
 
         log.info(f"  Classifying {name} ({mode} mode, {hits_table})")
         results = classify_sequences(hits, config,
-                                     compat_rounding=args.compat_tesorter_rounding)
+                                     compat_rounding=args.compat_tesorter_rounding,
+                                     compat_voting=args.compat_tesorter_voting)
 
         # Store and export per-database classification (TEsorter format)
         store_classifications(conn, results, database=name, mode=mode)

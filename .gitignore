@@ -27,3 +27,8 @@ ksort.py
 # Test/temp files
 tmp*/
 *.tmp
+
+# BATH fork scratch/verification outputs
+_verify/
+_genome_test/
+_full510/

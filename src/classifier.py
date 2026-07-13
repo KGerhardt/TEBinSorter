@@ -332,14 +332,20 @@ def apply_filters(hits, indices, min_cov=20.0, max_evalue=1e-3,
 # Classification
 # ---------------------------------------------------------------------------
 
-def classify_element(genes, clades, models, config):
+def classify_element(genes, clades, models, scores, config, compat_voting=False):
     """Classify a single TE element from its domain hits.
 
     Args:
         genes: list of gene names (domain types) in positional order
         clades: list of clade names corresponding to each gene
         models: list of full model names
+        scores: list of per-domain normalized scores (dom_score / model_len),
+                aligned with genes/clades/models. Used for score-weighted
+                clade voting (the default). Ignored when compat_voting=True.
         config: database config dict
+        compat_voting: if True, decide the clade by raw domain-count plurality
+                       (exact TEsorter replication). Default False uses the
+                       score-weighted vote.
 
     Returns:
         (order, superfamily, clade, complete)
@@ -347,28 +353,64 @@ def classify_element(genes, clades, models, config):
     parser = config["clade_parser"]
 
     if parser == "rexdb":
-        return _classify_rexdb(genes, clades, models, config)
+        return _classify_rexdb(genes, clades, models, scores, config,
+                               compat_voting=compat_voting)
     elif parser == "gydb":
-        return _classify_gydb(genes, clades, models, config)
+        return _classify_gydb(genes, clades, models, scores, config,
+                              compat_voting=compat_voting)
     elif parser == "sine":
         return "SINE", "unknown", "unknown", "unknown"
     else:
         return "Unknown", "unknown", "unknown", "unknown"
 
 
-def _classify_rexdb(genes, clades, models, config):
+def _clade_winner(clades, scores, compat_voting, compat_rule="rexdb"):
+    """Pick the winning clade and report whether it is an unambiguous winner.
+
+    Default (score-weighted): sum each clade's per-domain normalized scores and
+    take the argmax. The winner is "clear" unless the top two clades tie
+    exactly on summed score (vanishingly rare with continuous scores). This
+    resolves the TEsorter clade-swap artifact, where sibling clades draw an
+    equal number of domain votes and the tie is broken by dict iteration order.
+
+    compat_voting=True restores TEsorter's behaviour: plurality by raw domain
+    count. The "clear" rule differs per parser, matching the original code:
+      - rexdb: clear when single clade, or top count > 1 AND top count strictly
+        exceeds the second count (compared in insertion order).
+      - gydb:  clear when single clade, or top count > 1 (no second comparison).
+
+    Returns (max_clade, n_distinct, clear_winner).
+    """
+    if compat_voting:
+        clade_count = Counter(clades)
+        max_clade = max(clade_count, key=lambda x: clade_count[x])
+        counts = list(clade_count.values())
+        if compat_rule == "gydb":
+            clear = len(clade_count) == 1 or clade_count[max_clade] > 1
+        else:
+            clear = len(clade_count) == 1 or (
+                clade_count[max_clade] > 1 and len(counts) > 1 and counts[0] > counts[1])
+        return max_clade, len(clade_count), clear
+
+    weights = defaultdict(float)
+    for c, s in zip(clades, scores):
+        weights[c] += s
+    max_clade = max(weights, key=lambda x: weights[x])
+    ordered = sorted(weights.values(), reverse=True)
+    clear = len(weights) == 1 or (len(ordered) > 1 and ordered[0] > ordered[1])
+    return max_clade, len(weights), clear
+
+
+def _classify_rexdb(genes, clades, models, scores, config, compat_voting=False):
     """REXdb classification logic."""
-    clade_count = Counter(clades)
-    max_clade = max(clade_count, key=lambda x: clade_count[x])
+    max_clade, n_distinct, clear = _clade_winner(clades, scores, compat_voting)
 
     order, superfamily, _, _ = parse_clade_rexdb(
         [m for m, c in zip(models, clades) if c == max_clade][0])
 
-    counts = list(clade_count.values())
-    if len(clade_count) == 1 or (clade_count[max_clade] > 1 and
-                                  len(counts) > 1 and counts[0] > counts[1]):
+    if clear:
         display_clade = max_clade.split("/")[-1]
-    elif len(clade_count) > 1:
+    elif n_distinct > 1:
         display_clade = "mixture"
         superfamilies = [parse_clade_rexdb(m)[1] for m in models]
         if len(Counter(superfamilies)) > 1:
@@ -398,18 +440,18 @@ def _classify_rexdb(genes, clades, models, config):
     return order, superfamily, display_clade, complete
 
 
-def _classify_gydb(genes, clades, models, config):
+def _classify_gydb(genes, clades, models, scores, config, compat_voting=False):
     """GyDB classification logic. Requires clade_map."""
-    clade_count = Counter(clades)
-    max_clade = max(clade_count, key=lambda x: clade_count[x])
+    max_clade, n_distinct, clear = _clade_winner(
+        clades, scores, compat_voting, compat_rule="gydb")
 
     # Look up order/superfamily from clade map
     clade_map = config.get("_clade_map", {})
     order, superfamily = clade_map.get(max_clade, ("Unknown", "unknown"))
 
-    if len(clade_count) == 1 or clade_count[max_clade] > 1:
+    if clear:
         display_clade = max_clade
-    elif len(clade_count) > 1:
+    elif n_distinct > 1:
         display_clade = "mixture"
         superfamilies = [clade_map.get(c, [None, None])[1] for c in clades]
         if len(Counter(superfamilies)) > 1:
@@ -435,13 +477,17 @@ def _classify_gydb(genes, clades, models, config):
 # Full classification pipeline
 # ---------------------------------------------------------------------------
 
-def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False):
+def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False,
+                       compat_voting=False):
     """Full classification: hmm2best -> filter -> classify per sequence.
 
     Args:
         hits: dict from deconflict.load_hits()
         config: database config dict
         gydb_clade_map: optional {clade: (order, superfamily)} for GyDB
+        compat_voting: if True, decide the clade by raw domain-count plurality
+                       (exact TEsorter replication) instead of the default
+                       score-weighted vote.
 
     Returns:
         list of dicts with keys: id, order, superfamily, clade, complete,
@@ -500,6 +546,7 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False)
         genes = []
         clades = []
         models = []
+        scores = []
         domain_strs = []
 
         for i in sorted_indices:
@@ -516,10 +563,11 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False)
             genes.append(display_gene)
             clades.append(clade)
             models.append(model)
+            scores.append(float(hits["norm_score"][i]))
             domain_strs.append(f"{display_gene}|{clade}")
 
         order, superfamily, max_clade, complete = classify_element(
-            genes, clades, models, config)
+            genes, clades, models, scores, config, compat_voting=compat_voting)
 
         total_norm_score = float(np.sum(hits["norm_score"][sorted_indices]))
 

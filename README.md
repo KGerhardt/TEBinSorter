@@ -36,6 +36,77 @@ For amino acid databases, uses spliced sub-HMMs ("facets") for fast pre-screenin
 
 DNA databases (AnnoSINE) always use the default legacy search -- DNA facets do not provide sufficient sensitivity gains to justify the overhead.
 
+### BATH mode (`--bath`)
+
+Uses the [BATH](https://github.com/TravisWheelerLab/BATH) aligner (`bathsearch`) in
+place of pyhmmer/HMMER for amino-acid databases. BATH performs a **frameshift-aware
+translated search** of protein HMMs directly against the raw nucleotide input, so it
+detects domains across frameshifts and premature stops that six-frame translation +
+HMMER miss — its advantage grows on degraded/fragmented elements. No six-frame
+translation step is performed in this mode.
+
+- HMMER3 databases are converted to BATH format on first use (`bathconvert`) and cached
+  as `{db}.bath.hmm` alongside the original.
+- `bathsearch --fs` hits are ingested into the same `legacy_hits` table as the HMMER
+  path, so classification, cross-database reconciliation, and BLAST pass-2 are unchanged.
+- DNA databases (AnnoSINE) always fall back to HMMER (BATH searches protein profiles, not
+  DNA profiles).
+- `--bath` is incompatible with `--facet`. Set `BATH_BIN_DIR` if `bathsearch`/`bathconvert`
+  are not on the default install path.
+
+BATH is substantially slower than HMMER (≈8–20×), so prefer it when sensitivity on
+degraded sequences matters more than raw speed.
+
+### Genome mode (`--genome`)
+
+Replicates TEsorter's `-genome` mode: the input is treated as **whole-genome
+sequence(s)** rather than pre-extracted elements. TEBinSorter windows the genome,
+detects TE protein domains throughout, classifies **each domain individually**, maps
+coordinates back to genomic space, resolves overlapping features, and emits a
+**domain-level GFF3 + summary table**. It does not produce a per-element `.cls.tsv`
+and does not run BLAST pass-2 (genome mode stops at the domain GFF, exactly like
+TEsorter).
+
+Works with both engines:
+
+- **Default (HMMER):** six-frame translates each window and searches with pyhmmer,
+  then maps amino-acid envelope coordinates back to nucleotide coordinates.
+- **`--bath`:** runs `bathsearch --fs` directly on the nucleotide windows; the tblout
+  already reports nucleotide coordinates + strand per domain, so no translation or
+  frame arithmetic is needed — and frameshifted/fragmented genomic copies are recovered.
+
+Window size is controlled by `--win-size` (default `1e6`) and `--win-ovl` (default
+`1e5`). The HMMER engine automatically caps the window to stay under pyhmmer's
+100k-residue per-sequence limit (the retained overlap exceeds any TE domain, so no
+domains are lost); `--bath` honors the requested window size.
+
+Outputs: `{prefix}.dom.gff3` (classified domain features), `{prefix}.dom.faa`
+(HMMER, amino-acid domain sequences) or `{prefix}.dom.fna` (BATH, nucleotide domain
+sequences), and `{prefix}.genome.summary.tsv` (Order/Superfamily/Clade tallies).
+
+Genome mode is incompatible with `--facet` (which is element-level). It requires at
+least one amino-acid database (it detects protein domains); DNA-only databases such
+as `sine` are skipped.
+
+Validated against real TEsorter `-genome` on a 3 Mb rice region: the HMMER engine
+recovers **168/168** TEsorter domain features with **100% coordinate, strand, and
+Order/Superfamily/Clade agreement** (one extra borderline LINE domain at the
+detection threshold). On the same intact region BATH recovers ~95% of those domains
+with 100% classification agreement on shared features — BATH's edge is on degraded
+sequence, not pristine genomic copies.
+
+### Clade voting (score-weighted by default)
+
+Within each database, the winning clade is chosen by a **score-weighted vote**: each
+domain contributes its normalized score (`dom_score / model_len`) to its clade, and the
+highest-summed-score clade wins. This mirrors the cross-database
+`reconcile_classifications` weighting and resolves sibling-clade swaps (e.g. Reina↔Tekay,
+Ale↔Alesia) that TEsorter's raw domain-count vote breaks arbitrarily on tied counts.
+
+Pass `--compat-tesorter-voting` to restore TEsorter's exact behaviour (plurality by raw
+domain count). The TEsorter-compatible CLI (`tesorter_compat.py`) keeps count voting by
+default to remain a faithful drop-in replacement.
+
 ## Notes ##
 
 * All results reported by TEBinSorter ultimately emerge from identical HMM alignments to identical sequences with identical locations and hit probability metrics (e.g. E-values) using the same --nobias logic as the original; this guarantees that a hit found by TEBinSorter is bitwise identical to a hit found by TESorter. In the default mode, all hits are always 100% identical.
@@ -223,6 +294,36 @@ python3 src/pipeline.py input.fasta -d rexdb --facet -p 4 -o output_dir
 
 DNA databases automatically fall back to default mode when `--facet` is specified.
 
+### BATH mode (frameshift-aware, AA databases)
+
+```bash
+python3 src/pipeline.py input.fasta -d rexdb --bath -p 4 -o output_dir
+```
+
+Runs `bathsearch --fs` on the raw nucleotide input. DNA databases (AnnoSINE) still use
+HMMER. Set `BATH_BIN_DIR` if the BATH binaries are not on the default path.
+
+### Genome mode (whole-genome domain annotation)
+
+```bash
+# HMMER engine
+python3 src/pipeline.py genome.fasta -d rexdb --genome -p 16 -o output_dir
+# BATH engine (frameshift-aware), large windows
+python3 src/pipeline.py genome.fasta -d rexdb --genome --bath -p 16 -o output_dir
+```
+
+Treats the input as genome sequence(s): windows it, finds and classifies each TE
+protein domain, and emits `{prefix}.dom.gff3` + `{prefix}.genome.summary.tsv` (no
+per-element `.cls.tsv`, no BLAST pass-2). Tune windows with `--win-size` / `--win-ovl`.
+
+### Exact TEsorter clade voting
+
+```bash
+python3 src/pipeline.py input.fasta -d rexdb --compat-tesorter-voting -p 4 -o output_dir
+```
+
+Restores raw domain-count clade voting (default is the score-weighted vote).
+
 ## Databases
 
 TEBinSorter auto-detects database alphabet (amino acid or DNA) from the HMM file. Built-in aliases:
@@ -247,6 +348,10 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 | `{prefix}.cls.tsv` | Combined classifications across all databases + BLAST pass-2 |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (facet mode) |
 | `blast_pass2/` | BLAST database and query chunks (temporary) |
+| `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features (GFF3) |
+| `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
+| `{prefix}.genome.summary.tsv` | Genome mode: Order/Superfamily/Clade tallies |
+| `cut.fa` | Genome mode: windowed genome (temporary) |
 
 ## Architecture
 
@@ -256,6 +361,7 @@ Custom HMM databases can be passed as file paths in the `-d` argument. Pre-compu
 - **`search.py`** — HMM search engine with balanced parallelism
 - **`sequence.py`** — FASTA ingestion (pyfastx) and six-frame translation (pyhmmer)
 - **`hmm.py`** — HMM loading, alphabet detection, optimized profile construction
+- **`genome.py`** — Genome mode: windowing, per-domain classification, overlap resolution, GFF3/summary output (HMMER + BATH)
 - **`results.py`** — SQLite persistence with pre-parsed columns (base_seq, strand, frame, domain_type)
 - **`deconflict.py`** — Numpy-based hit deconfliction and parameterized filtering
 
