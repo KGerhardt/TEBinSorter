@@ -12,7 +12,7 @@ import time
 
 from .paths import get_db_dir
 from .hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
-from .search import build_sequence_block, legacy_search
+from .search import build_sequence_block, legacy_search, legacy_search_nucl
 from .sequence import translate_fasta, open_input
 from .results import (create_db, store_sequences, store_legacy, store_facet,
                      index_hits_tables, finalize_db,
@@ -136,6 +136,14 @@ def parse_args():
              "[default: the databases bundled with the package]",
     )
     parser.add_argument(
+        "--dna-engine",
+        choices=("nhmmer", "hmmsearch"),
+        default="nhmmer",
+        help="Engine for DNA databases. nhmmer scans both strands and handles "
+             "long targets; hmmsearch only scores the strand it is given and "
+             "is limited to 100k-residue sequences. [default: nhmmer]",
+    )
+    parser.add_argument(
         "--prefix",
         default=None,
         help="Output file prefix [default: basename of input]",
@@ -162,7 +170,8 @@ def parse_args():
         help="Use the BATH aligner (frameshift-aware translated nucleotide "
              "search) instead of pyhmmer/HMMER for amino-acid databases. "
              "Runs bathsearch --fs on the raw nucleotide input (no six-frame "
-             "translation). DNA databases (AnnoSINE) always use HMMER. "
+             "translation). BATH covers protein profiles only, so DNA "
+             "databases (AnnoSINE) still go through nhmmer. "
              "Set BATH_BIN_DIR if bathsearch/bathconvert are not on the "
              "default path.",
     )
@@ -204,9 +213,13 @@ def parse_args():
 
 
 def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
-                        facet_fallback=False):
+                        facet_fallback=False, dna_engine="nhmmer"):
     """
     Exhaustive single-pass nobias search against all models.
+
+    DNA-alphabet databases go through nhmmer, which scans both strands;
+    amino-acid databases go through hmmsearch. Pass dna_engine="hmmsearch" to
+    force the old single-strand behaviour on DNA databases.
 
     When facet_fallback=False (default), this is a true default-mode run and
     hits go to legacy_hits. When True, this call is the DNA-alphabet branch
@@ -217,14 +230,23 @@ def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
     log.info(f"Loading HMMs from {db_name}")
     t0 = time.time()
     hmms = load_hmms(db_path)
-    from .hmm import build_optimized_profiles
-    optimized = build_optimized_profiles(hmms, alphabet=alphabet)
+    use_nhmmer = alphabet == DNA_ALPHABET and dna_engine == "nhmmer"
+    optimized = None
+    if not use_nhmmer:
+        # nhmmer's pipeline builds its own profiles; optimizing here would be
+        # wasted work.
+        from .hmm import build_optimized_profiles
+        optimized = build_optimized_profiles(hmms, alphabet=alphabet)
     t1 = time.time()
-    log.info(f"  Loaded and optimized {len(hmms)} models in {t1 - t0:.1f}s")
+    log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
 
-    log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
     t2 = time.time()
-    hits = legacy_search(hmms, seq_block, optimized=optimized)
+    if use_nhmmer:
+        log.info(f"  nhmmer search: bias filter OFF, both strands, all models")
+        hits = legacy_search_nucl(hmms, seq_block)
+    else:
+        log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
+        hits = legacy_search(hmms, seq_block, optimized=optimized)
     t3 = time.time()
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
@@ -454,10 +476,11 @@ def main():
         elif args.facet and alphabet == DNA_ALPHABET:
             log.info(f"  DNA database: using legacy search (facets AA-only)")
             run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
-                                facet_fallback=True)
+                                facet_fallback=True, dna_engine=args.dna_engine)
             db_modes[name] = "facet"
         else:
-            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet)
+            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
+                                dna_engine=args.dna_engine)
             db_modes[name] = "default"
 
     # Build hits-table indexes now that all HMM hits are written and

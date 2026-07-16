@@ -114,6 +114,44 @@ def _collect_hits(top_hits_iter):
     return all_hits
 
 
+def _normalize_nucl_hit(hit):
+    """
+    Put an nhmmer hit into the convention the rest of the pipeline expects.
+
+    nhmmer reports descending coordinates for minus-strand hits. Sort them
+    ascending and encode the strand in the target suffix, the same way
+    bath_search does, so _parse_frame_info recovers the base sequence and
+    strand. Frame is always 1 here: nucleotide models are not translated.
+    """
+    af, at = hit["ali_from"], hit["ali_to"]
+    ef, et = hit["env_from"], hit["env_to"]
+    hit["target_name"] = f"{hit['target_name']}|{'fwd1' if af <= at else 'rev1'}"
+    hit["ali_from"], hit["ali_to"] = sorted((af, at))
+    hit["env_from"], hit["env_to"] = sorted((ef, et))
+    return hit
+
+
+def legacy_search_nucl(hmms, seq_block):
+    """
+    Single-pass nobias search of DNA models against nucleotide sequence.
+
+    Uses nhmmer, the DNA-DNA tool, rather than hmmsearch. hmmsearch only
+    scores the strand it is handed, so it misses every minus-strand copy, and
+    it rejects sequences over pyhmmer's 100k-residue limit. nhmmer scans both
+    strands in one pass and handles long targets.
+
+    bias_filter is off to match legacy_search (TEsorter's --nobias), and Z is
+    set to len(hmms) so E-values follow the same convention.
+    """
+    Z = len(hmms)
+    hits = _collect_hits(pyhmmer.nhmmer(
+        hmms, seq_block,
+        bias_filter=False,
+        Z=Z, domZ=Z, E=1e10,
+    ))
+    return [_normalize_nucl_hit(h) for h in hits]
+
+
 def _partition_hmms_by_size(hmms):
     """
     Partition HMMs into normal and outlier groups by M^2 cost.

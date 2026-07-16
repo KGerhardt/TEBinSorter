@@ -67,7 +67,8 @@ source. Put `bathsearch`/`bathconvert` on `PATH`, or set `BATH_BIN_DIR`.
  
 ### Default mode (pyHMMER)
  
-Single-pass `--nobias` `hmmsearch` against all models via pyHMMER, in-process.
+Single-pass `--nobias` search against all models via pyHMMER, in-process: `hmmsearch` for
+amino-acid databases, `nhmmer` for DNA databases (`sine`, `sine-so`).
  
 - Model-cost-aware parallel load balancing chooses between pyHMMER's `queries` and `targets`
   parallelization per model bin, reaching near-full CPU utilization (see
@@ -75,6 +76,17 @@ Single-pass `--nobias` `hmmsearch` against all models via pyHMMER, in-process.
 - Results are written to a SQLite database, so filtering and re-analysis do not require re-running
   the search.
   
+### DNA databases (nhmmer)
+
+DNA profile databases are searched with `nhmmer`, not `hmmsearch`. `hmmsearch` only scores the
+strand it is handed, so it misses every minus-strand copy, and pyHMMER rejects sequences over
+100k residues outright. `nhmmer` scans both strands in one pass and handles long targets.
+
+On 5 Mb of rice against `sine`, nhmmer records hits on both strands (15,992 `+` / 15,821 `-`)
+where hmmsearch records no strand at all, and classifies 48 windows against hmmsearch's 37.
+
+`--dna-engine hmmsearch` restores the old single-strand behaviour for comparison.
+
 ### Facet mode (`--facet`)
  
 Pre-screens amino-acid databases with spliced sub-HMMs ("facets") to route each sequence only to
@@ -86,7 +98,7 @@ the models likely to produce its best hit:
    `--nobias` search.
 3. **Cross-family completion**: verified frames searched for missing domain families.
 4. **Legacy fallback**: frames with no facet signal get a full search.
-DNA databases always use the default search; DNA facets do not repay their overhead.
+DNA databases always use the default search (nhmmer); DNA facets do not repay their overhead.
 Incompatible with `--bath` and `--genome`.
  
 ### BATH mode (`--bath`)
@@ -173,6 +185,7 @@ tesorter2 <sequence> [options]
 | `--max-search` | off | Search against all bundled databases |
 | `-o`, `--outdir` | `{input}.TESorter2` | Output directory |
 | `--db-dir` | bundled | Directory holding the HMM databases (see Installation) |
+| `--dna-engine` | `nhmmer` | Engine for DNA databases (`nhmmer` or `hmmsearch`) |
 | `--prefix` | input basename | Output file prefix |
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
