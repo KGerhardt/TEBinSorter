@@ -153,6 +153,29 @@ Every per-database call is retained in the `SecondaryHits` column as
 `db:order/superfamily/clade=score`, in descending order of evidence. Use `--compat-tesorter-output`
 for the original 7-column format.
  
+### Sequence Ontology
+
+`Order/Superfamily/Clade` is TEsorter's vocabulary, not a standard one. Every classification is
+also resolved to a [Sequence Ontology](http://www.sequenceontology.org) term, so results are
+comparable with other annotation tools:
+
+- `{prefix}.cls.tsv` gains `SO_name` and `SO_ID` columns (e.g. `Copia_LTR_retrotransposon`,
+  `SO:0002264`).
+- Genome-mode GFF3 features carry `Ontology_term=SO:...` plus `so_name=`. The feature type stays
+  `CDS`: these features are protein domains, not elements, so typing one as
+  `Gypsy_LTR_retrotransposon` would assert the domain *is* the retrotransposon.
+
+The mapping authority is [EDTA's `TE_Sequence_Ontology.txt`](https://github.com/oushujun/EDTA/blob/master/bin/TE_Sequence_Ontology.txt),
+bundled in `tesorter2/data/`. All 59 Order/Superfamily labels the bundled databases can emit
+resolve to a specific SO term; nothing falls back to the generic `repeat_region`.
+
+For lineages with no SO term of their own, EDTA files a descriptive name under a generic
+accession (`CR1_LINE_retrotransposon` is not a real SO term; its `SO:0000194` is
+`LINE_element`'s). `SO_name` keeps EDTA's name for interoperability, while anything written as an
+ontology term resolves to the real one.
+
+`--compat-tesorter-output` suppresses the SO columns, keeping the original 7-column format.
+
 ### Clade voting
  
 Within each database the winning clade is chosen by a **score-weighted vote**: each domain
@@ -208,7 +231,7 @@ tesorter2 <sequence> [options]
 | `{prefix}.db` | SQLite database with all hits, classifications and BLAST results |
 | `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
 | `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
-| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`) |
+| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
 | `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
@@ -257,7 +280,7 @@ back-mapping that dominate the HMMER path on long sequences.
 | `{prefix}.db` | SQLite database with all hits, classifications and BLAST results |
 | `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
 | `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
-| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`) |
+| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
 | `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |

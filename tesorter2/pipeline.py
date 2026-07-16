@@ -550,6 +550,7 @@ def main():
         export_classification_tsv(
             all_results, combined_tsv,
             include_secondary=not args.compat_tesorter_output,
+            include_so=not args.compat_tesorter_output,
         )
         log.info(f"  Combined: {len(all_results)} classified -> {combined_tsv}")
 
