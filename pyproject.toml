@@ -37,12 +37,11 @@ Repository = "https://github.com/KGerhardt/TESorter2"
 tesorter2 = "tesorter2.pipeline:main"
 tesorter2-compat = "tesorter2.tesorter_compat:main"
 tesorter2-emit = "tesorter2.emit:main"
-tesorter2-download-db = "tesorter2.download_db:main"
 
 [tool.setuptools]
 packages = ["tesorter2"]
 
 [tool.setuptools.package-data]
-# Small data files shipped with the code. The large HMM databases are NOT
-# packaged here; install them with `tesorter2-download-db`.
-tesorter2 = ["data/*"]
+# The HMM databases ship inside the package, as they do in TEsorter: ~76 MB
+# raw, ~13 MB compressed in the wheel, so an install needs no download step.
+tesorter2 = ["database/*", "data/*"]

@@ -34,8 +34,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Database directory: repo-bundled in a dev checkout, otherwise the location
-# populated by `tesorter2-download-db`. Override with --db-dir or TESORTER2_DB.
+# Database directory: the databases ship inside the package. Override with
+# --db-dir or TESORTER2_DB to point at a custom collection.
 DB_DIR = get_db_dir()
 
 DB_ALIASES = {
@@ -58,8 +58,7 @@ def resolve_db(name, db_dir=None):
         if os.path.isfile(path):
             return os.path.abspath(path)
         raise FileNotFoundError(
-            f"Database alias '{name}' -> {path} not found. "
-            f"If databases are not installed, run: tesorter2-download-db")
+            f"Database alias '{name}' -> {path} not found under {base}")
     raise FileNotFoundError(f"Database '{name}' not found (not a file or known alias)")
 
 
@@ -134,7 +133,7 @@ def parse_args():
         "--db-dir",
         default=None,
         help="Directory containing the HMM databases "
-             "[default: bundled / TESORTER2_DB / download-db location]",
+             "[default: the databases bundled with the package]",
     )
     parser.add_argument(
         "--prefix",

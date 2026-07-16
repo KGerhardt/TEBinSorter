@@ -25,7 +25,6 @@ git clone https://github.com/KGerhardt/TESorter2.git
 cd TESorter2
 conda env create -f environment.yml
 conda activate tesorter2
-tesorter2-download-db          # fetch the HMM databases (~hundreds of MB)
 ```
 
 ### pip
@@ -34,22 +33,21 @@ Requires Python >= 3.9. HMMER and BLAST+ must already be on `PATH`:
 
 ```bash
 pip install git+https://github.com/KGerhardt/TESorter2.git
-tesorter2-download-db
 ```
 
 ### Databases
 
-The HMM databases are distributed separately from the code. `tesorter2-download-db` installs
-them into `$XDG_DATA_HOME/tesorter2/database` (default `~/.local/share/tesorter2/database`),
-where TEsorter2 finds them automatically. To use another location:
+The HMM databases (REXdb, GyDB2, LINE, TIR, AnnoSINE) ship inside the package, as they do in
+TEsorter, so there is no download step and no configuration: `tesorter2 input.fasta` works
+straight after install.
+
+To use a custom collection of HMM databases instead, point TEsorter2 at its directory:
 
 ```bash
-tesorter2-download-db --db-dir /path/to/db
-export TESORTER2_DB=/path/to/db     # or pass --db-dir to tesorter2
+tesorter2 input.fasta --db-dir /path/to/db     # or: export TESORTER2_DB=/path/to/db
 ```
 
-A development checkout that still contains `database/` is used automatically, so contributors
-need no download step.
+Individual databases can also be passed by path: `-d /path/to/custom.hmm`.
 
 ### BATH (optional, only for `--bath`)
 
@@ -174,7 +172,7 @@ tesorter2 <sequence> [options]
 | `-d`, `--database` | `rexdb` | Comma-separated database aliases or paths |
 | `--max-search` | off | Search against all bundled databases |
 | `-o`, `--outdir` | `{input}.TESorter2` | Output directory |
-| `--db-dir` | auto | Directory holding the HMM databases (see Installation) |
+| `--db-dir` | bundled | Directory holding the HMM databases (see Installation) |
 | `--prefix` | input basename | Output file prefix |
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
