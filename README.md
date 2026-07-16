@@ -14,6 +14,48 @@ keeps its classification semantics while introducing three major improvements:
    whose ties were broken by internal data-structure ordering.
 It also adds multi-database reconciliation in a single run and a genome mode for both engines.
 
+## Installation
+
+### conda (recommended)
+
+Installs the external binaries (HMMER, BLAST+) and TEsorter2 in one step:
+
+```bash
+git clone https://github.com/KGerhardt/TESorter2.git
+cd TESorter2
+conda env create -f environment.yml
+conda activate tesorter2
+tesorter2-download-db          # fetch the HMM databases (~hundreds of MB)
+```
+
+### pip
+
+Requires Python >= 3.9. HMMER and BLAST+ must already be on `PATH`:
+
+```bash
+pip install git+https://github.com/KGerhardt/TESorter2.git
+tesorter2-download-db
+```
+
+### Databases
+
+The HMM databases are distributed separately from the code. `tesorter2-download-db` installs
+them into `$XDG_DATA_HOME/tesorter2/database` (default `~/.local/share/tesorter2/database`),
+where TEsorter2 finds them automatically. To use another location:
+
+```bash
+tesorter2-download-db --db-dir /path/to/db
+export TESORTER2_DB=/path/to/db     # or pass --db-dir to tesorter2
+```
+
+A development checkout that still contains `database/` is used automatically, so contributors
+need no download step.
+
+### BATH (optional, only for `--bath`)
+
+[BATH](https://github.com/TravisWheelerLab/BATH) is not available on conda and must be built from
+source. Put `bathsearch`/`bathconvert` on `PATH`, or set `BATH_BIN_DIR`.
+
 ## Choosing an engine
  
 | | Element mode (pre-extracted TEs) | Genome mode (assembly) |
@@ -123,7 +165,7 @@ original behaviour.
 ## CLI reference
  
 ```
-python3 src/pipeline.py <sequence> [options]
+tesorter2 <sequence> [options]
 ```
  
 | Flag | Default | Description |
@@ -131,7 +173,8 @@ python3 src/pipeline.py <sequence> [options]
 | `sequence` | — | Input FASTA (TE library, or genome with `--genome`) |
 | `-d`, `--database` | `rexdb` | Comma-separated database aliases or paths |
 | `--max-search` | off | Search against all bundled databases |
-| `-o`, `--outdir` | `{input}.TEBinSorter` | Output directory |
+| `-o`, `--outdir` | `{input}.TESorter2` | Output directory |
+| `--db-dir` | auto | Directory holding the HMM databases (see Installation) |
 | `--prefix` | input basename | Output file prefix |
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
@@ -219,11 +262,11 @@ TEsorter2 | BATH | 983 s | 3.0× |
 
 ## TEsorter compatibility
  
-`src/tesorter_compat.py` provides a drop-in CLI with TEsorter's original argument names and
+`tesorter2-compat` provides a drop-in CLI with TEsorter's original argument names and
 defaults (including count-based clade voting), for substituting TEsorter inside existing pipelines:
  
 ```bash
-python3 src/tesorter_compat.py input.fasta -db rexdb -p 16 -pre out
+tesorter2-compat input.fasta -db rexdb -p 16 -pre out
 ```
  
 Supported: `-db/--hmm-database`, `--db-hmm`, `-st/--seq-type`, `-pre/--prefix`, `-p/--processors`,
@@ -336,3 +379,10 @@ actually contain hits.
 ---
 
 
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+The bundled HMM databases (REXdb, GyDB2, AnnoSINE, Kapitonov LINE, Yuan & Wessler TIR) carry
+their own upstream licenses and terms of use; see their respective sources.
