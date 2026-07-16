@@ -15,7 +15,7 @@ from collections import defaultdict
 import pyhmmer
 import pyhmmer.easel as easel
 
-from search import tophits_to_domtbl, parse_domtbl_text
+from .search import tophits_to_domtbl, parse_domtbl_text
 
 log = logging.getLogger(__name__)
 

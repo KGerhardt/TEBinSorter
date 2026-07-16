@@ -20,9 +20,9 @@ from collections import defaultdict
 import pyhmmer
 import pyhmmer.easel as easel
 
-from decompose_hmm import build_sub_hmms_from_file, build_sub_hmms_tiered, _load_hmms
-from model_graph import get_or_build_graph
-from search import (tophits_to_domtbl, parse_domtbl_text, _collect_hits,
+from .decompose_hmm import build_sub_hmms_from_file, build_sub_hmms_tiered, _load_hmms
+from .model_graph import get_or_build_graph
+from .search import (tophits_to_domtbl, parse_domtbl_text, _collect_hits,
                     _partition_hmms_by_size)
 
 log = logging.getLogger(__name__)
@@ -298,7 +298,7 @@ def facet_classify(hmm_path, seq_block, seq_fasta, alphabet,
     Z = len(hmms)
 
     # Pre-optimize profiles for verification calls
-    from hmm import build_optimized_profiles
+    from .hmm import build_optimized_profiles
     optimized = build_optimized_profiles(hmms)
 
     # Detect DNA vs AA
@@ -523,13 +523,13 @@ def facet_classify_v2(hmm_path, seq_block, seq_fasta, alphabet,
     """
     import os
 
-    from cross_family import find_missing_families, search_missing_v2
+    from .cross_family import find_missing_families, search_missing_v2
 
     hmms = _load_hmms(hmm_path)
     hmms_dict = {h.name: h for h in hmms}
     Z = len(hmms)
 
-    from hmm import build_optimized_profiles
+    from .hmm import build_optimized_profiles
     optimized = build_optimized_profiles(hmms)
 
     is_dna = hmms[0].alphabet == easel.Alphabet.dna() if hmms else False

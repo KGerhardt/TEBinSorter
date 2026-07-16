@@ -30,13 +30,14 @@ import re
 import sys
 import time
 
-from hmm import load_hmms, build_optimized_profiles, AMINO_ALPHABET
-from sequence import (open_input, clean_seq, revcomp, translate_fasta,
+from .hmm import load_hmms, build_optimized_profiles, AMINO_ALPHABET
+from .sequence import (open_input, clean_seq, revcomp, translate_fasta,
                       parse_frame_suffix, aa_to_nucl_coords, load_sequences_dict)
-from search import build_sequence_block, legacy_search
-from classifier import (parse_clade_rexdb, parse_clade_gydb, classify_element,
+from .search import build_sequence_block, legacy_search
+from .classifier import (parse_clade_rexdb, parse_clade_gydb, classify_element,
                         load_gydb_clade_map, DB_CONFIGS)
-import bath_search
+from . import bath_search
+
 
 log = logging.getLogger(__name__)
 
@@ -246,7 +247,7 @@ def _hit_to_feature(h, engine, config, win_lengths):
             "coverage={:.1f};evalue={:g};score={:.3f}").format(
         gid, name, cls, gene, clade, hmm_cov, h["evalue"], norm_score)
 
-    feature = (chrom, "TEBinSorter", "CDS", g_start, g_end,
+    feature = (chrom, "TESorter2", "CDS", g_start, g_end,
                round(norm_score, 3), strand, frame_str, attr,
                gid, extract)
     return feature, cls

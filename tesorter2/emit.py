@@ -19,9 +19,9 @@ import argparse
 import sqlite3
 from collections import defaultdict
 
-from sequence import load_sequences_dict, parse_frame_suffix
-from search import _invert_seq_models, _plan_work_units
-from hmm import load_hmms
+from .sequence import load_sequences_dict, parse_frame_suffix
+from .search import _invert_seq_models, _plan_work_units
+from .hmm import load_hmms
 
 log = logging.getLogger(__name__)
 
@@ -126,12 +126,12 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="emit-bath",
-        description="Emit routed FASTA partitions from a TEBinSorter "
+        description="Emit routed FASTA partitions from a TESorter2 "
                     "results database for use with the BATH aligner.",
     )
     parser.add_argument(
         "database",
-        help="Path to TEBinSorter results .db file",
+        help="Path to TESorter2 results .db file",
     )
     parser.add_argument(
         "sequences",
@@ -175,7 +175,7 @@ def main():
     # Check pass1_hits exists and has data
     count = conn.execute("SELECT COUNT(*) FROM pass1_hits").fetchone()[0]
     if count == 0:
-        log.error("No pass-1 hits in database. Run TEBinSorter first.")
+        log.error("No pass-1 hits in database. Run TESorter2 first.")
         conn.close()
         sys.exit(1)
     log.info(f"Found {count} pass-1 hits in {args.database}")

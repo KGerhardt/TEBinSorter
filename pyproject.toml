@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tesorter2"
+version = "2.0.0"
+description = "Fast, divergence-robust classification of transposable elements from HMM profile databases"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Kenji Gerhardt" },
+]
+keywords = ["transposable elements", "TE", "HMMER", "bioinformatics", "annotation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Operating System :: POSIX :: Linux",
+]
+# External tools NOT installable via pip and required at runtime:
+#   - HMMER (nhmmer)         via conda/system
+#   - BLAST+ (blastp/makeblastdb) via conda/system, for BLAST pass-2
+#   - BATH (bathsearch/bathconvert) optional, only for --bath; build from source
+dependencies = [
+    "pyhmmer>=0.10",
+    "pyfastx",
+    "numpy",
+]
+
+[project.urls]
+Homepage = "https://github.com/KGerhardt/TESorter2"
+Repository = "https://github.com/KGerhardt/TESorter2"
+
+[project.scripts]
+tesorter2 = "tesorter2.pipeline:main"
+tesorter2-compat = "tesorter2.tesorter_compat:main"
+tesorter2-emit = "tesorter2.emit:main"
+tesorter2-download-db = "tesorter2.download_db:main"
+
+[tool.setuptools]
+packages = ["tesorter2"]
+
+[tool.setuptools.package-data]
+# Small data files shipped with the code. The large HMM databases are NOT
+# packaged here; install them with `tesorter2-download-db`.
+tesorter2 = ["data/*"]

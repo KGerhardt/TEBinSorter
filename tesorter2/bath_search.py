@@ -43,7 +43,7 @@ def _bin(name):
     return path
 
 
-# Optional pre-converted BATH HMMs, keyed by TEBinSorter db alias. Used as a
+# Optional pre-converted BATH HMMs, keyed by TESorter2 db alias. Used as a
 # shortcut to skip bathconvert when these files already exist; the cache /
 # fallback conversion below is the self-contained path that always works.
 _PROJECT = "/anvil/projects/x-bio250374/daniel/bath_vs_hmmer"

@@ -22,7 +22,7 @@ import pyfastx
 import pyhmmer
 import pyhmmer.easel as easel
 
-from hmm import AMINO_ALPHABET
+from .hmm import AMINO_ALPHABET
 
 log = logging.getLogger(__name__)
 
@@ -389,7 +389,7 @@ def _init_worker(hmm_path, alphabet_str, seq_fasta):
     else:
         _worker_alphabet = easel.Alphabet.rna()
 
-    from hmm import load_hmms, build_optimized_profiles
+    from .hmm import load_hmms, build_optimized_profiles
     all_hmms = load_hmms(hmm_path)
     _worker_hmms_dict = {h.name: h for h in all_hmms}
     _worker_optimized = build_optimized_profiles(all_hmms, _worker_alphabet)

@@ -10,21 +10,23 @@ import logging
 import os
 import time
 
-from hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
-from search import build_sequence_block, legacy_search
-from sequence import translate_fasta, open_input
-from results import (create_db, store_sequences, store_legacy, store_facet,
+from .paths import get_db_dir
+from .hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
+from .search import build_sequence_block, legacy_search
+from .sequence import translate_fasta, open_input
+from .results import (create_db, store_sequences, store_legacy, store_facet,
                      index_hits_tables, finalize_db,
                      FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
                      FACET_STAGE_LEGACY_FALLBACK)
-from facet_classify import (facet_classify, facet_classify_v2,
+from .facet_classify import (facet_classify, facet_classify_v2,
                             export_classifications_tsv)
-from cross_family import find_missing_families, search_missing, search_missing_v2
-from classifier import (classify_sequences, export_classification_tsv,
+from .cross_family import find_missing_families, search_missing, search_missing_v2
+from .classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, reconcile_classifications,
                        DB_CONFIGS)
-from blast_pass2 import blast_pass2
-import bath_search
+from .blast_pass2 import blast_pass2
+from . import bath_search
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,11 +34,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Known database aliases -> paths relative to TEsorter database dir
-DB_DIR = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)),
-    "..", "database",
-)
+# Database directory: repo-bundled in a dev checkout, otherwise the location
+# populated by `tesorter2-download-db`. Override with --db-dir or TESORTER2_DB.
+DB_DIR = get_db_dir()
 
 DB_ALIASES = {
     "rexdb":    "REXdb_protein_database_viridiplantae_v4.0_plus_metazoa_v3.1.hmm",
@@ -48,21 +48,24 @@ DB_ALIASES = {
 }
 
 
-def resolve_db(name):
+def resolve_db(name, db_dir=None):
     """Resolve a database name or alias to an absolute path."""
     if os.path.isfile(name):
         return os.path.abspath(name)
     if name in DB_ALIASES:
-        path = os.path.join(DB_DIR, DB_ALIASES[name])
+        base = db_dir or DB_DIR
+        path = os.path.join(base, DB_ALIASES[name])
         if os.path.isfile(path):
             return os.path.abspath(path)
-        raise FileNotFoundError(f"Database alias '{name}' -> {path} not found")
+        raise FileNotFoundError(
+            f"Database alias '{name}' -> {path} not found. "
+            f"If databases are not installed, run: tesorter2-download-db")
     raise FileNotFoundError(f"Database '{name}' not found (not a file or known alias)")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        prog="TEBinSorter",
+        prog="tesorter2",
         description="Fast TE classification using HMM profile databases. "
                     "Default mode produces results identical to TEsorter.",
     )
@@ -125,7 +128,13 @@ def parse_args():
     parser.add_argument(
         "-o", "--outdir",
         default=None,
-        help="Output directory [default: {input}.TEBinSorter]",
+        help="Output directory [default: {input}.TESorter2]",
+    )
+    parser.add_argument(
+        "--db-dir",
+        default=None,
+        help="Directory containing the HMM databases "
+             "[default: bundled / TESORTER2_DB / download-db location]",
     )
     parser.add_argument(
         "--prefix",
@@ -209,7 +218,7 @@ def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
     log.info(f"Loading HMMs from {db_name}")
     t0 = time.time()
     hmms = load_hmms(db_path)
-    from hmm import build_optimized_profiles
+    from .hmm import build_optimized_profiles
     optimized = build_optimized_profiles(hmms, alphabet=alphabet)
     t1 = time.time()
     log.info(f"  Loaded and optimized {len(hmms)} models in {t1 - t0:.1f}s")
@@ -306,7 +315,7 @@ def main():
 
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
-    outdir = args.outdir or f"{input_base}.TEBinSorter"
+    outdir = args.outdir or f"{input_base}.TESorter2"
     prefix = args.prefix or input_base
     os.makedirs(outdir, exist_ok=True)
 
@@ -321,9 +330,10 @@ def main():
     else:
         db_names = [s.strip() for s in args.database.split(",")]
 
+    db_dir = get_db_dir(args.db_dir)
     db_paths = {}
     for name in db_names:
-        db_paths[name] = resolve_db(name)
+        db_paths[name] = resolve_db(name, db_dir=db_dir)
 
     log.info(f"Input: {args.sequence}")
     log.info(f"Databases: {', '.join(db_names)}")
@@ -347,7 +357,8 @@ def main():
     # It windows the genome, finds/classifies each TE protein domain, and emits
     # a GFF3 + summary -- no element classification, reconcile, or BLAST pass-2.
     if args.genome:
-        import genome
+        from . import genome
+
         log.info("Genome mode")
         genome.run_genome(
             args.sequence, db_paths, db_alphabets, outdir, prefix,
@@ -459,7 +470,7 @@ def main():
 
     # --- Classification ---
     log.info("--- Classification ---")
-    from deconflict import load_hits
+    from .deconflict import load_hits
     per_db_results = {}
 
     for name in db_names:

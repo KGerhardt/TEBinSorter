@@ -87,9 +87,9 @@ DB_CONFIGS = {
     "sine-so": SINE_CONFIG,
 }
 
-# GyDB clade map: loaded from GyDB2.hmm.info
-_GYDB_INFO_PATH = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), "..", "database", "GyDB2.hmm.info")
+# GyDB clade map: loaded from GyDB2.hmm.info (ships alongside GyDB2.hmm)
+from .paths import get_db_dir
+_GYDB_INFO_PATH = os.path.join(get_db_dir(), "GyDB2.hmm.info")
 
 
 def load_gydb_clade_map(info_path=None):
