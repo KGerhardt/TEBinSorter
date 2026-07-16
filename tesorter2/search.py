@@ -131,6 +131,10 @@ def _normalize_nucl_hit(hit):
     return hit
 
 
+# E-value fields reported per hit; all share the same search-space scaling.
+_EVALUE_FIELDS = ("evalue", "c_evalue", "i_evalue")
+
+
 def legacy_search_nucl(hmms, seq_block):
     """
     Single-pass nobias search of DNA models against nucleotide sequence.
@@ -140,15 +144,27 @@ def legacy_search_nucl(hmms, seq_block):
     it rejects sequences over pyhmmer's 100k-residue limit. nhmmer scans both
     strands in one pass and handles long targets.
 
-    bias_filter is off to match legacy_search (TEsorter's --nobias), and Z is
-    set to len(hmms) so E-values follow the same convention.
+    bias_filter is off to match legacy_search (TEsorter's --nobias).
+
+    E-values need care. Z does not mean the same thing to the two engines:
+    hmmsearch's -Z is a number of comparisons, while nhmmer's -Z is a database
+    size in megabases. On top of that, pyhmmer's nhmmer applies Z twice, giving
+    E = P * Z^2 where the nhmmer binary gives E = P * megabases.
+
+    Both formulas agree at Z=1, where each returns P, the E-value against a
+    1 Mb database. So ask for Z=1 and scale by the real database size here.
+    That reproduces the nhmmer binary exactly and keeps working if pyhmmer
+    fixes the double-scaling.
     """
-    Z = len(hmms)
+    megabases = sum(len(s) for s in seq_block) / 1e6
     hits = _collect_hits(pyhmmer.nhmmer(
         hmms, seq_block,
         bias_filter=False,
-        Z=Z, domZ=Z, E=1e10,
+        Z=1, E=1e10,
     ))
+    for h in hits:
+        for field in _EVALUE_FIELDS:
+            h[field] *= megabases
     return [_normalize_nucl_hit(h) for h in hits]
 
 
