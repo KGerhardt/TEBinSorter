@@ -87,9 +87,10 @@ DB_CONFIGS = {
     "sine-so": SINE_CONFIG,
 }
 
-# GyDB clade map: loaded from GyDB2.hmm.info
-_GYDB_INFO_PATH = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), "..", "database", "GyDB2.hmm.info")
+# GyDB clade map: loaded from GyDB2.hmm.info (ships alongside GyDB2.hmm)
+from .paths import get_db_dir
+from .so_map import lookup as so_lookup
+_GYDB_INFO_PATH = os.path.join(get_db_dir(), "GyDB2.hmm.info")
 
 
 def load_gydb_clade_map(info_path=None):
@@ -624,17 +625,23 @@ def store_classifications(conn, results, database=None, mode="default"):
     conn.commit()
 
 
-def export_classification_tsv(results, out_path, include_secondary=False):
+def export_classification_tsv(results, out_path, include_secondary=False,
+                              include_so=False):
     """Export classification results as TSV.
 
     Default format matches TEsorter cls.tsv (7 columns). If
     include_secondary=True, appends a SecondaryHits column containing
     per-database classifications and evidence scores in descending order.
+    If include_so=True, appends the Sequence Ontology term and accession for
+    the Order/Superfamily call. Both are appended, leaving the positions of
+    the original seven columns untouched.
     """
     columns = ["#TE", "Order", "Superfamily", "Clade", "Complete",
                "Strand", "Domains"]
     if include_secondary:
         columns.append("SecondaryHits")
+    if include_so:
+        columns += ["SO_name", "SO_ID"]
     with open(out_path, "w") as f:
         f.write("\t".join(columns) + "\n")
         for r in results:
@@ -650,6 +657,9 @@ def export_classification_tsv(results, out_path, include_secondary=False):
                 else:
                     sec_str = "."
                 line.append(sec_str)
+            if include_so:
+                so_name, so_id = so_lookup(r["order"], r["superfamily"])
+                line += [so_name, so_id]
             f.write("\t".join(line) + "\n")
 
 

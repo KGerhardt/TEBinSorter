@@ -1,0 +1,20 @@
+name: tesorter2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.9
+  - pip
+  # external binaries required at runtime
+  - hmmer            # provides nhmmer (DNA databases) and hmmsearch
+  - blast            # BLAST+ for pass-2 verification
+  # python deps (also declared in pyproject.toml)
+  - pyhmmer>=0.10
+  - pyfastx
+  - numpy
+  - pip:
+      - -e .
+# NOTE: BATH (bathsearch/bathconvert) is not on bioconda. It is only needed
+# for --bath runs; build it from source (https://github.com/TravisWheelerLab/BATH)
+# and put the binaries on PATH or set BATH_BIN_DIR.
+# The HMM databases ship inside the package: no download step is needed.

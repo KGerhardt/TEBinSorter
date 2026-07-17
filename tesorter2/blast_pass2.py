@@ -307,7 +307,7 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
 
     # Split
     if outdir is None:
-        outdir = tempfile.mkdtemp(prefix="tebinsorter_blast_")
+        outdir = tempfile.mkdtemp(prefix="tesorter2_blast_")
 
     blast_dir = os.path.join(outdir, "blast_pass2")
     db_fasta, query_chunks, db_seq_to_dbs = split_classified_unclassified(

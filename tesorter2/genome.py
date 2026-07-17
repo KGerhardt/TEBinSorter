@@ -30,13 +30,15 @@ import re
 import sys
 import time
 
-from hmm import load_hmms, build_optimized_profiles, AMINO_ALPHABET
-from sequence import (open_input, clean_seq, revcomp, translate_fasta,
+from .hmm import load_hmms, build_optimized_profiles, AMINO_ALPHABET
+from .sequence import (open_input, clean_seq, revcomp, translate_fasta,
                       parse_frame_suffix, aa_to_nucl_coords, load_sequences_dict)
-from search import build_sequence_block, legacy_search
-from classifier import (parse_clade_rexdb, parse_clade_gydb, classify_element,
+from .search import build_sequence_block, legacy_search
+from .so_map import so_gff_type
+from .classifier import (parse_clade_rexdb, parse_clade_gydb, classify_element,
                         load_gydb_clade_map, DB_CONFIGS)
-import bath_search
+from . import bath_search
+
 
 log = logging.getLogger(__name__)
 
@@ -242,11 +244,18 @@ def _hit_to_feature(h, engine, config, win_lengths):
 
     gid = "{}:{}-{}|{}".format(chrom, g_start, g_end, model)
     name = "{}-{}".format(clade, gene)
+    # The feature is a protein domain, not the element, so its type stays CDS:
+    # typing it as the element's SO term would assert the domain *is* the
+    # retrotransposon. The element's ontology term goes in Ontology_term, the
+    # GFF3-reserved attribute for ontology cross-references.
+    so_name, so_id = so_gff_type(order, superfamily)
     attr = ("ID={};Name={};Classification={};gene={};clade={};"
-            "coverage={:.1f};evalue={:g};score={:.3f}").format(
-        gid, name, cls, gene, clade, hmm_cov, h["evalue"], norm_score)
+            "coverage={:.1f};evalue={:g};score={:.3f};"
+            "Ontology_term={};so_name={}").format(
+        gid, name, cls, gene, clade, hmm_cov, h["evalue"], norm_score,
+        so_id, so_name)
 
-    feature = (chrom, "TEBinSorter", "CDS", g_start, g_end,
+    feature = (chrom, "TESorter2", "CDS", g_start, g_end,
                round(norm_score, 3), strand, frame_str, attr,
                gid, extract)
     return feature, cls

@@ -14,6 +14,46 @@ keeps its classification semantics while introducing three major improvements:
    whose ties were broken by internal data-structure ordering.
 It also adds multi-database reconciliation in a single run and a genome mode for both engines.
 
+## Installation
+
+### conda (recommended)
+
+Installs the external binaries (HMMER, BLAST+) and TEsorter2 in one step:
+
+```bash
+git clone https://github.com/KGerhardt/TESorter2.git
+cd TESorter2
+conda env create -f environment.yml
+conda activate tesorter2
+```
+
+### pip
+
+Requires Python >= 3.9. HMMER and BLAST+ must already be on `PATH`:
+
+```bash
+pip install git+https://github.com/KGerhardt/TESorter2.git
+```
+
+### Databases
+
+The HMM databases (REXdb, GyDB2, LINE, TIR, AnnoSINE) ship inside the package, as they do in
+TEsorter, so there is no download step and no configuration: `tesorter2 input.fasta` works
+straight after install.
+
+To use a custom collection of HMM databases instead, point TEsorter2 at its directory:
+
+```bash
+tesorter2 input.fasta --db-dir /path/to/db     # or: export TESORTER2_DB=/path/to/db
+```
+
+Individual databases can also be passed by path: `-d /path/to/custom.hmm`.
+
+### BATH (optional, only for `--bath`)
+
+[BATH](https://github.com/TravisWheelerLab/BATH) is not available on conda and must be built from
+source. Put `bathsearch`/`bathconvert` on `PATH`, or set `BATH_BIN_DIR`.
+
 ## Choosing an engine
  
 | | Element mode (pre-extracted TEs) | Genome mode (assembly) |
@@ -27,7 +67,8 @@ It also adds multi-database reconciliation in a single run and a genome mode for
  
 ### Default mode (pyHMMER)
  
-Single-pass `--nobias` `hmmsearch` against all models via pyHMMER, in-process.
+Single-pass `--nobias` search against all models via pyHMMER, in-process: `hmmsearch` for
+amino-acid databases, `nhmmer` for DNA databases (`sine`, `sine-so`).
  
 - Model-cost-aware parallel load balancing chooses between pyHMMER's `queries` and `targets`
   parallelization per model bin, reaching near-full CPU utilization (see
@@ -35,6 +76,17 @@ Single-pass `--nobias` `hmmsearch` against all models via pyHMMER, in-process.
 - Results are written to a SQLite database, so filtering and re-analysis do not require re-running
   the search.
   
+### DNA databases (nhmmer)
+
+DNA profile databases are searched with `nhmmer`, not `hmmsearch`. `hmmsearch` only scores the
+strand it is handed, so it misses every minus-strand copy, and pyHMMER rejects sequences over
+100k residues outright. `nhmmer` scans both strands in one pass and handles long targets.
+
+On 5 Mb of rice against `sine`, nhmmer records hits on both strands (15,992 `+` / 15,821 `-`)
+where hmmsearch records no strand at all, and classifies 48 windows against hmmsearch's 37.
+
+`--dna-engine hmmsearch` restores the old single-strand behaviour for comparison.
+
 ### Facet mode (`--facet`)
  
 Pre-screens amino-acid databases with spliced sub-HMMs ("facets") to route each sequence only to
@@ -46,7 +98,7 @@ the models likely to produce its best hit:
    `--nobias` search.
 3. **Cross-family completion**: verified frames searched for missing domain families.
 4. **Legacy fallback**: frames with no facet signal get a full search.
-DNA databases always use the default search; DNA facets do not repay their overhead.
+DNA databases always use the default search (nhmmer); DNA facets do not repay their overhead.
 Incompatible with `--bath` and `--genome`.
  
 ### BATH mode (`--bath`)
@@ -101,6 +153,29 @@ Every per-database call is retained in the `SecondaryHits` column as
 `db:order/superfamily/clade=score`, in descending order of evidence. Use `--compat-tesorter-output`
 for the original 7-column format.
  
+### Sequence Ontology
+
+`Order/Superfamily/Clade` is TEsorter's vocabulary, not a standard one. Every classification is
+also resolved to a [Sequence Ontology](http://www.sequenceontology.org) term, so results are
+comparable with other annotation tools:
+
+- `{prefix}.cls.tsv` gains `SO_name` and `SO_ID` columns (e.g. `Copia_LTR_retrotransposon`,
+  `SO:0002264`).
+- Genome-mode GFF3 features carry `Ontology_term=SO:...` plus `so_name=`. The feature type stays
+  `CDS`: these features are protein domains, not elements, so typing one as
+  `Gypsy_LTR_retrotransposon` would assert the domain *is* the retrotransposon.
+
+The mapping authority is [EDTA's `TE_Sequence_Ontology.txt`](https://github.com/oushujun/EDTA/blob/master/bin/TE_Sequence_Ontology.txt),
+bundled in `tesorter2/data/`. All 59 Order/Superfamily labels the bundled databases can emit
+resolve to a specific SO term; nothing falls back to the generic `repeat_region`.
+
+For lineages with no SO term of their own, EDTA files a descriptive name under a generic
+accession (`CR1_LINE_retrotransposon` is not a real SO term; its `SO:0000194` is
+`LINE_element`'s). `SO_name` keeps EDTA's name for interoperability, while anything written as an
+ontology term resolves to the real one.
+
+`--compat-tesorter-output` suppresses the SO columns, keeping the original 7-column format.
+
 ### Clade voting
  
 Within each database the winning clade is chosen by a **score-weighted vote**: each domain
@@ -123,7 +198,7 @@ original behaviour.
 ## CLI reference
  
 ```
-python3 src/pipeline.py <sequence> [options]
+tesorter2 <sequence> [options]
 ```
  
 | Flag | Default | Description |
@@ -131,7 +206,9 @@ python3 src/pipeline.py <sequence> [options]
 | `sequence` | — | Input FASTA (TE library, or genome with `--genome`) |
 | `-d`, `--database` | `rexdb` | Comma-separated database aliases or paths |
 | `--max-search` | off | Search against all bundled databases |
-| `-o`, `--outdir` | `{input}.TEBinSorter` | Output directory |
+| `-o`, `--outdir` | `{input}.TESorter2` | Output directory |
+| `--db-dir` | bundled | Directory holding the HMM databases (see Installation) |
+| `--dna-engine` | `nhmmer` | Engine for DNA databases (`nhmmer` or `hmmsearch`) |
 | `--prefix` | input basename | Output file prefix |
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
@@ -154,7 +231,7 @@ python3 src/pipeline.py <sequence> [options]
 | `{prefix}.db` | SQLite database with all hits, classifications and BLAST results |
 | `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
 | `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
-| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`) |
+| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
 | `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
@@ -203,7 +280,7 @@ back-mapping that dominate the HMMER path on long sequences.
 | `{prefix}.db` | SQLite database with all hits, classifications and BLAST results |
 | `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
 | `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
-| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`) |
+| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
 | `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
@@ -219,11 +296,11 @@ TEsorter2 | BATH | 983 s | 3.0× |
 
 ## TEsorter compatibility
  
-`src/tesorter_compat.py` provides a drop-in CLI with TEsorter's original argument names and
+`tesorter2-compat` provides a drop-in CLI with TEsorter's original argument names and
 defaults (including count-based clade voting), for substituting TEsorter inside existing pipelines:
  
 ```bash
-python3 src/tesorter_compat.py input.fasta -db rexdb -p 16 -pre out
+tesorter2-compat input.fasta -db rexdb -p 16 -pre out
 ```
  
 Supported: `-db/--hmm-database`, `--db-hmm`, `-st/--seq-type`, `-pre/--prefix`, `-p/--processors`,
@@ -336,3 +413,15 @@ actually contain hits.
 ---
 
 
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+The bundled HMM databases (REXdb, GyDB2, AnnoSINE, Kapitonov LINE, Yuan & Wessler TIR) are
+third-party data with their own upstream licenses — CC BY 4.0 (REXdb), Creative Commons
+Attribution (GyDB2), MIT (AnnoSINE), and redistribution via TEsorter/GPL-3.0 (Kapitonov LINE,
+Yuan & Wessler TIR). TESorter2's GPL-3.0 does **not** extend to them. Per-database licenses,
+sources, and required citations are in
+[`tesorter2/database/LICENSES.md`](tesorter2/database/LICENSES.md); cite the databases you run
+against.
