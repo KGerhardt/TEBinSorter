@@ -418,5 +418,10 @@ actually contain hits.
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-The bundled HMM databases (REXdb, GyDB2, AnnoSINE, Kapitonov LINE, Yuan & Wessler TIR) carry
-their own upstream licenses and terms of use; see their respective sources.
+The bundled HMM databases (REXdb, GyDB2, AnnoSINE, Kapitonov LINE, Yuan & Wessler TIR) are
+third-party data with their own upstream licenses — CC BY 4.0 (REXdb), Creative Commons
+Attribution (GyDB2), MIT (AnnoSINE), and redistribution via TEsorter/GPL-3.0 (Kapitonov LINE,
+Yuan & Wessler TIR). TESorter2's GPL-3.0 does **not** extend to them. Per-database licenses,
+sources, and required citations are in
+[`tesorter2/database/LICENSES.md`](tesorter2/database/LICENSES.md); cite the databases you run
+against.
