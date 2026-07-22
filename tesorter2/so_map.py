@@ -1,5 +1,5 @@
 """
-so_map.py — Map TESorter2 classifications onto Sequence Ontology terms.
+so_map.py — Map TEsorter2 classifications onto Sequence Ontology terms.
 
 Classifications are emitted as Order/Superfamily/Clade, which is TEsorter's
 vocabulary rather than a standard one. This resolves those labels to Sequence
@@ -29,7 +29,7 @@ SO_FILE = os.path.join(_DATA, "TE_Sequence_Ontology.txt")
 # Generic fallback for labels with no established SO term.
 UNKNOWN_SO = ("repeat_region", "SO:0000657")
 
-# Labels TESorter2 emits that EDTA's aliases do not cover. Each maps onto the
+# Labels TEsorter2 emits that EDTA's aliases do not cover. Each maps onto the
 # closest established SO term; none of these have a term of their own.
 _EXTRA_ALIASES = {
     # Order-level: no SO term for these orders, fall back to their class.

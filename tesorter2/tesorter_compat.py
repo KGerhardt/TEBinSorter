@@ -3,7 +3,7 @@ tesorter_compat.py — TEsorter-compatible CLI entry point.
 
 Accepts the same command-line arguments as TEsorter and produces
 output files in the same format and naming convention. Downstream
-tools that depend on TEsorter's output structure can use TESorter2
+tools that depend on TEsorter's output structure can use TEsorter2
 as a drop-in replacement.
 
 Usage:
@@ -41,7 +41,7 @@ DB_MAP = {
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="TEsorter",
-        description="TESorter2 running in TEsorter-compatible mode. "
+        description="TEsorter2 running in TEsorter-compatible mode. "
                     "Lineage-level classification of transposable elements "
                     "using conserved protein domains.",
     )
@@ -82,7 +82,7 @@ def parse_args():
                         default=False,
                         help="Do not clean up temporary directory")
 
-    # TESorter2 extension
+    # TEsorter2 extension
     parser.add_argument("--facet", action="store_true", default=False,
                         help="Use facet pre-screening for faster search "
                              "(AA databases only)")
@@ -111,7 +111,7 @@ def main():
     outdir = os.path.dirname(prefix) or "."
     file_prefix = os.path.basename(prefix)
 
-    log.info(f"TESorter2 (TEsorter-compatible mode)")
+    log.info(f"TEsorter2 (TEsorter-compatible mode)")
     log.info(f"Input: {args.sequence}")
     log.info(f"Database: {db_name} -> {db_arg}")
     log.info(f"Prefix: {prefix}")

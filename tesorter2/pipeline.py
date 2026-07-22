@@ -127,7 +127,7 @@ def parse_args():
     parser.add_argument(
         "-o", "--outdir",
         default=None,
-        help="Output directory [default: {input}.TESorter2]",
+        help="Output directory [default: {input}.TEsorter2]",
     )
     parser.add_argument(
         "--db-dir",
@@ -336,7 +336,7 @@ def main():
 
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
-    outdir = args.outdir or f"{input_base}.TESorter2"
+    outdir = args.outdir or f"{input_base}.TEsorter2"
     prefix = args.prefix or input_base
     os.makedirs(outdir, exist_ok=True)
 

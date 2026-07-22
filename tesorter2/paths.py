@@ -1,5 +1,5 @@
 """
-paths.py — Centralized resolution of the TESorter2 database directory.
+paths.py — Centralized resolution of the TEsorter2 database directory.
 
 The HMM databases ship inside the package (tesorter2/database/), as they do in
 TEsorter, so an install needs no download step. Resolution order:

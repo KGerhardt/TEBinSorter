@@ -206,7 +206,7 @@ tesorter2 <sequence> [options]
 | `sequence` | — | Input FASTA (TE library, or genome with `--genome`) |
 | `-d`, `--database` | `rexdb` | Comma-separated database aliases or paths |
 | `--max-search` | off | Search against all bundled databases |
-| `-o`, `--outdir` | `{input}.TESorter2` | Output directory |
+| `-o`, `--outdir` | `{input}.TEsorter2` | Output directory |
 | `--db-dir` | bundled | Directory holding the HMM databases (see Installation) |
 | `--dna-engine` | `nhmmer` | Engine for DNA databases (`nhmmer` or `hmmsearch`) |
 | `--prefix` | input basename | Output file prefix |

@@ -255,7 +255,7 @@ def _hit_to_feature(h, engine, config, win_lengths):
         gid, name, cls, gene, clade, hmm_cov, h["evalue"], norm_score,
         so_id, so_name)
 
-    feature = (chrom, "TESorter2", "CDS", g_start, g_end,
+    feature = (chrom, "TEsorter2", "CDS", g_start, g_end,
                round(norm_score, 3), strand, frame_str, attr,
                gid, extract)
     return feature, cls

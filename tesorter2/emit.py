@@ -126,12 +126,12 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="emit-bath",
-        description="Emit routed FASTA partitions from a TESorter2 "
+        description="Emit routed FASTA partitions from a TEsorter2 "
                     "results database for use with the BATH aligner.",
     )
     parser.add_argument(
         "database",
-        help="Path to TESorter2 results .db file",
+        help="Path to TEsorter2 results .db file",
     )
     parser.add_argument(
         "sequences",
@@ -175,7 +175,7 @@ def main():
     # Check pass1_hits exists and has data
     count = conn.execute("SELECT COUNT(*) FROM pass1_hits").fetchone()[0]
     if count == 0:
-        log.error("No pass-1 hits in database. Run TESorter2 first.")
+        log.error("No pass-1 hits in database. Run TEsorter2 first.")
         conn.close()
         sys.exit(1)
     log.info(f"Found {count} pass-1 hits in {args.database}")
