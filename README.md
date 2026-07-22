@@ -21,8 +21,8 @@ It also adds multi-database reconciliation in a single run and a genome mode for
 Installs the external binaries (HMMER, BLAST+) and TEsorter2 in one step:
 
 ```bash
-git clone https://github.com/KGerhardt/TESorter2.git
-cd TESorter2
+git clone https://github.com/KGerhardt/TEsorter2.git
+cd TEsorter2
 conda env create -f environment.yml
 conda activate tesorter2
 ```
@@ -32,7 +32,7 @@ conda activate tesorter2
 Requires Python >= 3.9. HMMER and BLAST+ must already be on `PATH`:
 
 ```bash
-pip install git+https://github.com/KGerhardt/TESorter2.git
+pip install git+https://github.com/KGerhardt/TEsorter2.git
 ```
 
 ### Databases
@@ -416,12 +416,12 @@ actually contain hits.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](https://github.com/KGerhardt/TESorter2/blob/master/LICENSE).
+GPL-3.0-or-later. See [LICENSE](https://github.com/KGerhardt/TEsorter2/blob/master/LICENSE).
 
 The bundled HMM databases (REXdb, GyDB2, AnnoSINE, Kapitonov LINE, Yuan & Wessler TIR) are
 third-party data with their own upstream licenses — CC BY 4.0 (REXdb), Creative Commons
 Attribution (GyDB2), MIT (AnnoSINE), and redistribution via TEsorter/GPL-3.0 (Kapitonov LINE,
 Yuan & Wessler TIR). TEsorter2's GPL-3.0 does **not** extend to them. Per-database licenses,
 sources, and required citations are in
-[`tesorter2/database/LICENSES.md`](https://github.com/KGerhardt/TESorter2/blob/master/tesorter2/database/LICENSES.md); cite the databases you run
+[`tesorter2/database/LICENSES.md`](https://github.com/KGerhardt/TEsorter2/blob/master/tesorter2/database/LICENSES.md); cite the databases you run
 against.
