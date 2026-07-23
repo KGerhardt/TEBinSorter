@@ -135,12 +135,25 @@ def _overlap_pct(a, b):
     return 100.0 * ovl / shorter if shorter > 0 else 0.0
 
 
+def _resolve_sort_key(feat):
+    """Canonical, run-order-independent ordering for the overlap sweep:
+    start asc, end asc, score desc, then gid to break any remaining ties.
+
+    The sweep below is greedy and order-sensitive, so without a total order its
+    output depends on the order features were appended (e.g. which databases ran
+    and in what sequence). Keying on gid (unique per feature) makes the result
+    deterministic and identical regardless of co-searched databases -- so the
+    SINE annotation is the same whether or not a protein database ran alongside."""
+    return (feat[3], feat[4], -feat[5], feat[9])
+
+
 def resolve_overlaps(features, max_ovl=20):
-    """Within one chromosome, drop equal/overlapping features keeping the
-    higher score (feature[5]). Faithful port of TEsorter resolve_overlaps."""
+    """Within one chromosome (and one feature type), drop equal/overlapping
+    features keeping the higher score (feature[5]). Faithful port of TEsorter
+    resolve_overlaps, with a deterministic tie-broken sweep order."""
     last = None
     discards = []
-    for feat in sorted(features, key=lambda x: x[3]):
+    for feat in sorted(features, key=_resolve_sort_key):
         discard = None
         if last:
             if feat == last:
@@ -158,12 +171,26 @@ def resolve_overlaps(features, max_ovl=20):
 
 
 def group_resolve_overlaps(features):
-    """Resolve overlaps per chromosome (feature[0])."""
+    """Resolve overlaps per chromosome (feature[0]) AND per feature type
+    (feature[2]).
+
+    Overlaps are resolved within each feature type, not globally, so a
+    protein-domain feature (CDS) and a non-coding-element feature (e.g.
+    SINE_element from nhmmer) that share genomic coordinates coexist as
+    independent annotation layers rather than evicting one another. This is
+    deliberate: their scores live on different scales (nucleotide-HMM bits from
+    nhmmer vs protein-HMM bits from HMMER/BATH), so a global 'keep the higher
+    score' comparison across the boundary is not meaningful; and the DNA-element
+    annotation must not depend on whether a protein database was co-searched.
+    Within a single type, resolution is unchanged, so protein-only runs behave
+    exactly as before (every feature is CDS -> one group per chromosome)."""
     resolved = []
-    for chrom, items in itertools.groupby(sorted(features, key=lambda x: x[0]),
-                                           key=lambda x: x[0]):
+    keyf = lambda x: (x[0], x[2])
+    for (chrom, ftype), items in itertools.groupby(sorted(features, key=keyf),
+                                                    key=keyf):
         items = list(items)
-        log.info("  resolving overlaps in {} ({} features)".format(chrom, len(items)))
+        log.info("  resolving overlaps in {} {} ({} features)".format(
+            chrom, ftype, len(items)))
         resolved += resolve_overlaps(items)
     return resolved
 
@@ -226,14 +253,23 @@ def _hit_to_feature(h, engine, config, win_lengths):
     gene, clade = _parse_model(model, config)
 
     if engine in ("bath", "nhmmer"):
-        # Both yield nucleotide ali coords + strand via the |fwd1/|rev1 suffix
-        # (BATH from its tblout, nhmmer from search._normalize_nucl_hit), so the
-        # coordinate handling is identical. The sub-sequence is the nucleotide
-        # window slice (revcomp on minus), extracted from cut.fa.
+        # Both yield ascending nucleotide ali coords + strand via the |fwd1/|rev1
+        # suffix (BATH from its tblout, nhmmer from search._normalize_nucl_hit),
+        # so the coordinate handling is identical. They differ only in what was
+        # searched, which fixes the sequence source and coordinate frame:
+        #   bath   -> the windowed cut.fa (coords are within-window; _split_
+        #             window_id maps the window offset to genomic space below),
+        #   nhmmer -> the RAW input genome directly (nhmmer handles long targets,
+        #             so it is not windowed; target is the whole chromosome and
+        #             the coords are already genomic). Running nhmmer off the raw
+        #             input -- not cut.fa -- keeps the DNA-element annotation
+        #             independent of the protein path's window sizing (the HMMER
+        #             window cap would otherwise change what nhmmer sees).
         window_id, strand, _frame = parse_frame_suffix(h["target_name"])
         w_start, w_end = h["ali_from"], h["ali_to"]   # nucleotide, ascending
         frame_str = "."
-        extract = (window_id, w_start, w_end, strand, "nucl")
+        extract = (window_id, w_start, w_end, strand,
+                   "win" if engine == "bath" else "raw")
     else:  # hmmer: AA envelope -> within-window nucleotide coords
         window_id, strand, frame = parse_frame_suffix(h["target_name"])
         wlen = win_lengths.get(window_id)
@@ -284,18 +320,24 @@ def _hit_to_feature(h, engine, config, win_lengths):
 # Output
 # ---------------------------------------------------------------------------
 
-def _feature_kind(feature):
-    """'aa' (protein-domain, HMMER frames) or 'nucl' (element, BATH/nhmmer
-    windows) — the last element of the extraction tuple."""
+# Extraction source (last element of feature[10]) -> (FASTA it reads from,
+# output alphabet). "aa" = HMMER's translated frames (amino acids), "win" = BATH's
+# nucleotide windows (cut.fa), "raw" = nhmmer's un-windowed input genome.
+_SRC_ALPHA = {"aa": "faa", "win": "fna", "raw": "fna"}
+
+
+def _feature_src(feature):
+    """Extraction source tag ('aa' | 'win' | 'raw') — last element of the
+    extraction tuple."""
     return feature[10][4]
 
 
 def _extract_domain_seq(feature, seq_cache):
     """Sub-sequence for one feature: amino acids for HMMER (AA slice of the
-    translated frame), nucleotides for BATH/nhmmer (window slice, revcomp on
-    minus). The extraction tuple is (key, start, end, strand, kind) with key
-    into seq_cache and 1-based start/end in that sequence's coordinate system."""
-    key, start, end, strand, _kind = feature[10]
+    translated frame), nucleotides for BATH/nhmmer (revcomp on minus). The
+    extraction tuple is (key, start, end, strand, src) with key into seq_cache
+    and 1-based start/end in that sequence's own coordinate system."""
+    key, start, end, strand, _src = feature[10]
     seq = seq_cache.get(key, "")
     sub = seq[start - 1:end]
     if strand == "-":
@@ -303,38 +345,37 @@ def _extract_domain_seq(feature, seq_cache):
     return sub
 
 
-def write_outputs(features, outdir, prefix, aa_fa, cut_fa):
+def write_outputs(features, outdir, prefix, aa_fa, cut_fa, input_fasta):
     """Write {prefix}.dom.gff3, the sub-sequence FASTA(s), and the summary table.
 
     Protein-domain features (HMMER) emit amino acids to {prefix}.dom.faa; element
     features (BATH/nhmmer) emit nucleotides to {prefix}.dom.fna. A run producing
-    both writes both files; a single-kind run writes just the one.
+    both writes both files; a single-alphabet run writes just the one. Each
+    feature is read back from the FASTA it was searched against: HMMER frames
+    from aa_fa, BATH windows from cut_fa, nhmmer elements from the input genome.
 
     Returns (gff_path, [seq_paths], summary_path)."""
     gff_path = os.path.join(outdir, "{}.dom.gff3".format(prefix))
     summary_path = os.path.join(outdir, "{}.genome.summary.tsv".format(prefix))
 
-    kinds = {_feature_kind(f) for f in features}
-    # Load only the caches a present kind needs: AA frames from aa_fa, nucl
-    # windows from cut_fa.
-    caches = {}
-    seq_paths = {}
-    if "aa" in kinds:
-        caches["aa"] = load_sequences_dict(aa_fa)
-        seq_paths["aa"] = os.path.join(outdir, "{}.dom.faa".format(prefix))
-    if "nucl" in kinds:
-        caches["nucl"] = load_sequences_dict(cut_fa)
-        seq_paths["nucl"] = os.path.join(outdir, "{}.dom.fna".format(prefix))
+    src_fasta = {"aa": aa_fa, "win": cut_fa, "raw": input_fasta}
+    srcs = {_feature_src(f) for f in features}
+    # Load only the source caches actually needed.
+    caches = {s: load_sequences_dict(src_fasta[s]) for s in srcs}
 
-    handles = {k: open(p, "w") for k, p in seq_paths.items()}
+    # One output handle per alphabet (.faa / .fna), opened only if present.
+    alphas = {_SRC_ALPHA[s] for s in srcs}
+    seq_paths = {a: os.path.join(outdir, "{}.dom.{}".format(prefix, a))
+                 for a in alphas}
+    handles = {a: open(p, "w") for a, p in seq_paths.items()}
     try:
         with open(gff_path, "w") as fg:
             fg.write("##gff-version 3\n")
             for feat in features:
                 fg.write("\t".join(map(str, feat[:9])) + "\n")
-                kind = _feature_kind(feat)
-                sub = _extract_domain_seq(feat, caches[kind])
-                handles[kind].write(">{} {}\n{}\n".format(
+                src = _feature_src(feat)
+                sub = _extract_domain_seq(feat, caches[src])
+                handles[_SRC_ALPHA[src]].write(">{} {}\n{}\n".format(
                     feat[9], feat[8], sub))
     finally:
         for h in handles.values():
@@ -422,12 +463,16 @@ def _search_bath(cut_fa, db_path, db_name, n_workers, outdir):
 
 
 def _search_nhmmer(db_path, nucl_block):
-    """DNA-DNA search of a nucleotide model set against the nucleotide windows,
-    both strands in one pass (search.legacy_search_nucl). Hits already carry
-    ascending nucleotide ali coords + a |fwd1/|rev1 strand suffix, so win_lengths
-    is unused. The caller builds nucl_block once and shares it across DNA dbs."""
+    """DNA-DNA search of a nucleotide model set against the RAW input genome,
+    both strands in one pass (search.legacy_search_nucl). nhmmer handles long
+    targets, so the input is searched un-windowed: the target is the whole
+    chromosome and hits carry genomic ali coords + a |fwd1/|rev1 strand suffix
+    (win_lengths is unused). The caller builds nucl_block from the input once and
+    shares it across DNA dbs. Searching the raw input rather than cut.fa keeps
+    the DNA-element annotation independent of the protein path's window sizing."""
     hmms = load_hmms(db_path)
-    log.info("  Searching {} DNA models (nhmmer, both strands)".format(len(hmms)))
+    log.info("  Searching {} DNA models (nhmmer, both strands, raw input)".format(
+        len(hmms)))
     hits = legacy_search_nucl(hmms, nucl_block)
     log.info("  {} raw nucleotide hits".format(len(hits)))
     return hits, {}
@@ -480,12 +525,14 @@ def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
 
     aa_fa = os.path.join(outdir, "{}.windows.aa".format(prefix))
 
-    # nhmmer scans the nucleotide windows directly; build the block once and
-    # reuse it across every DNA database.
+    # nhmmer scans the RAW input genome directly (un-windowed; it handles long
+    # targets). Build the block once from the input and reuse it across every DNA
+    # database. Using the input rather than cut.fa makes the DNA-element
+    # annotation independent of the HMMER window cap above.
     nucl_block = None
     if nucl_dbs:
-        log.info("Building nucleotide window block for nhmmer")
-        nucl_block = build_sequence_block(cut_fa, DNA_ALPHABET)
+        log.info("Building nucleotide block from input for nhmmer")
+        nucl_block = build_sequence_block(input_fasta, DNA_ALPHABET)
 
     all_features = []
     for name in aa_dbs + nucl_dbs:
@@ -527,7 +574,8 @@ def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
     # Sort for stable output: chromosome, then start.
     resolved.sort(key=lambda x: (x[0], x[3]))
 
-    gff, seqfs, summ = write_outputs(resolved, outdir, prefix, aa_fa, cut_fa)
+    gff, seqfs, summ = write_outputs(
+        resolved, outdir, prefix, aa_fa, cut_fa, input_fasta)
     log.info("  Feature GFF3: {}".format(gff))
     for p in seqfs:
         log.info("  Feature seqs: {}".format(p))
