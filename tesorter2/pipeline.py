@@ -90,9 +90,10 @@ def parse_args():
         default=False,
         help="Genome mode: input is genome sequence(s). Windows the genome, "
              "detects TE protein domains throughout, classifies each domain "
-             "individually, and emits a domain-level GFF3 + summary table "
+             "individually, and emits a feature-level GFF3 + summary table "
              "(no per-element .cls.tsv, no BLAST pass-2). Works with the "
-             "default HMMER engine and with --bath.",
+             "default HMMER engine and with --bath. DNA databases (e.g. sine) "
+             "are searched with nhmmer to find non-coding elements too.",
     )
     parser.add_argument(
         "--win-size",
