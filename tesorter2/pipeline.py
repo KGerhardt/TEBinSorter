@@ -243,7 +243,7 @@ def parse_args():
         "--pass2-aligner",
         choices=["minimap2", "blast"], default="minimap2",
         help="Aligner for the pass-2 similarity search. 'minimap2' (default) "
-             "uses the PAF qcov+tcov path; 'blast' reproduces TEBinSorter "
+             "uses the PAF qcov+tcov path; 'blast' reproduces TEsorter2 "
              "master's blastn pass-2 (qcovs + alignment-length filter, "
              "clade=unknown). Both share the same -rule and the "
              "--pass2-classified-fasta external-pool merge.",

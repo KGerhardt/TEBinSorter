@@ -1,5 +1,9 @@
 # memo — TEBinSorter_minimap2 port
 
+> **Naming note (added 2026-07-28):** this codebase was renamed **TEsorter2** upstream
+> (`KGerhardt/TESorter2`) after this run. Names, paths and commands below are left exactly
+> as they were at the time so the run stays reproducible — read "TEBinSorter" as "TEsorter2".
+
 ## Date
 
 Created 2026-04-24.

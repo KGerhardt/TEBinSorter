@@ -1,6 +1,6 @@
-# TEBinSorter_minimap2
+# TEsorter2_minimap2
 
-Fork of TEBinSorter with pass-2 similarity search swapped from `blastn` to
+Fork of TEsorter2 with pass-2 similarity search swapped from `blastn` to
 [minimap2](https://github.com/lh3/minimap2). Pass-2 runs minimap2 with a
 sensitivity-tuned flag set, then reduces the PAF to one row per query via
 `classify_ltr_paf_fast`, which enforces **identity, qcov, and tcov together**
@@ -14,7 +14,7 @@ under the user-supplied I-C-L rule.
 mamba install -c bioconda minimap2
 ```
 
-Everything else is unchanged from TEBinSorter (pyhmmer, pyfastx, numpy).
+Everything else is unchanged from TEsorter2 (pyhmmer, pyfastx, numpy).
 
 ## New / changed CLI options
 
@@ -55,7 +55,7 @@ The `blast_hits` table stores one row per query (best target) with columns
 `qseqid, sseqid, pident, qcovs, tcovs, passes_rule, classified_by`. Indexes
 on `qseqid` and `sseqid` are still built by `results.finalize_db`.
 
-## What changed vs stock TEBinSorter
+## What changed vs stock TEsorter2
 
 - `tesorter2/blast_pass2.py` — internals swapped from `blastn`+`multiprocessing.Pool`
   to one `minimap2` call followed by `classify_ltr_paf_fast.process_paf`.

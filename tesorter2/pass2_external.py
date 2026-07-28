@@ -3,8 +3,8 @@ pass2_external.py — helpers for the --pass2-classified-fasta feature.
 
 Ported from github.com/cwb14/TEsorter branch `my-new-idea2` (TEsorter/app.py,
 head commit b398509). The upstream helpers used Biopython SeqIO and TEsorter's
-CommonClassification namedtuple. Here we use pyfastx (already a TEBinSorter
-dependency) and emit dicts matching TEBinSorter's classifications-dict shape
+CommonClassification namedtuple. Here we use pyfastx (already a TEsorter2
+dependency) and emit dicts matching TEsorter2's classifications-dict shape
 (`id/order/superfamily/clade/complete/strand/domains/score/secondary`).
 """
 
@@ -57,7 +57,7 @@ def parse_cls_from_fasta_header(header):
 def extend_hmm_classifications_from_fasta(hmm_cls, fasta_path, db_seq_to_dbs):
     """Merge external FASTA classifications into hmm_cls in place.
 
-    Each added entry is shaped like TEBinSorter's reconciled classifications
+    Each added entry is shaped like TEsorter2's reconciled classifications
     dict so classifier.py:568 still sees the fields it expects. Also extends
     db_seq_to_dbs so classify_from_blast accepts hits pointing at these IDs.
     """
@@ -66,7 +66,7 @@ def extend_hmm_classifications_from_fasta(hmm_cls, fasta_path, db_seq_to_dbs):
 
     added = 0
     skipped = 0
-    # pyfastx is faster than Biopython and already in TEBinSorter's deps.
+    # pyfastx is faster than Biopython and already in TEsorter2's deps.
     fa = pyfastx.Fasta(fasta_path, build_index=True, full_name=True)
     for rec in fa:
         parsed = parse_cls_from_fasta_header(rec.name)
@@ -182,7 +182,7 @@ def update_classified_fasta_headers(fasta_path, hmm_cls, tmpdir):
 def clean_fasta_atcg(path):
     """In-place ATCG-only cleaner. Kept for completeness / upstream parity.
 
-    Not actively called by TEBinSorter's pass-2 because the mmseqs wrapper
+    Not actively called by TEsorter2's pass-2 because the mmseqs wrapper
     already cleans the query and merge_classified_fastas cleans the DB.
     """
     tmp = path + ".atcg_clean.tmp"

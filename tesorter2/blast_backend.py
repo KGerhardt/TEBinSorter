@@ -1,7 +1,7 @@
 """
-blast_backend.py — TEBinSorter master's blastn pass-2 logic, lifted verbatim so
+blast_backend.py — TEsorter2 master's blastn pass-2 logic, lifted verbatim so
 the `--pass2-aligner blast` path runs and post-processes identically to
-TEBinSorter master.
+TEsorter2 master.
 
 The orchestrator `run_pass2_blast` is called by blast_pass2.blast_pass2() AFTER
 the shared classified/unclassified split and the optional pass2_external merge,
@@ -208,7 +208,7 @@ def run_pass2_blast(qry_fasta, db_fasta, conn, classifications, db_seq_to_dbs,
                     n_processors, min_identity, min_coverage, min_length, work):
     """blastn pass-2 over an already-prepared (db_fasta, qry_fasta) pair.
 
-    Reproduces TEBinSorter master's: makeblastdb -> chunked parallel blastn ->
+    Reproduces TEsorter2 master's: makeblastdb -> chunked parallel blastn ->
     outfmt6 parse -> SQLite -> classify_from_blast (qcovs+length filter, best by
     bitscore, clade=unknown). The I/C/L thresholds come from the run's -rule.
     """
