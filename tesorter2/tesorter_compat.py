@@ -3,7 +3,7 @@ tesorter_compat.py — TEsorter-compatible CLI entry point.
 
 Accepts the same command-line arguments as TEsorter and produces
 output files in the same format and naming convention. Downstream
-tools that depend on TEsorter's output structure can use TEBinSorter
+tools that depend on TEsorter's output structure can use TEsorter2
 as a drop-in replacement.
 
 Usage:
@@ -41,7 +41,7 @@ DB_MAP = {
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="TEsorter",
-        description="TEBinSorter running in TEsorter-compatible mode. "
+        description="TEsorter2 running in TEsorter-compatible mode. "
                     "Lineage-level classification of transposable elements "
                     "using conserved protein domains.",
     )
@@ -82,7 +82,7 @@ def parse_args():
                         default=False,
                         help="Do not clean up temporary directory")
 
-    # TEBinSorter extension
+    # TEsorter2 extension
     parser.add_argument("--facet", action="store_true", default=False,
                         help="Use facet pre-screening for faster search "
                              "(AA databases only)")
@@ -111,7 +111,7 @@ def main():
     outdir = os.path.dirname(prefix) or "."
     file_prefix = os.path.basename(prefix)
 
-    log.info(f"TEBinSorter (TEsorter-compatible mode)")
+    log.info(f"TEsorter2 (TEsorter-compatible mode)")
     log.info(f"Input: {args.sequence}")
     log.info(f"Database: {db_name} -> {db_arg}")
     log.info(f"Prefix: {prefix}")
@@ -122,23 +122,23 @@ def main():
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
-    from hmm import peek_alphabet, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
-    from search import build_sequence_block, legacy_search
-    from sequence import translate_fasta, open_input, clean_seq
-    from results import (create_db, store_sequences, store_legacy, store_facet,
+    from .hmm import peek_alphabet, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
+    from .search import build_sequence_block, legacy_search
+    from .sequence import translate_fasta, open_input, clean_seq
+    from .results import (create_db, store_sequences, store_legacy, store_facet,
                          index_hits_tables, finalize_db,
                          FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
                          FACET_STAGE_LEGACY_FALLBACK)
-    from classifier import (classify_sequences, export_classification_tsv,
+    from .classifier import (classify_sequences, export_classification_tsv,
                             store_classifications, DB_CONFIGS)
-    from blast_pass2 import blast_pass2
-    from deconflict import load_hits
+    from .blast_pass2 import blast_pass2
+    from .deconflict import load_hits
 
     import time
     t_start = time.time()
 
     # Resolve database path
-    from pipeline import resolve_db, DB_ALIASES
+    from .pipeline import resolve_db, DB_ALIASES
     try:
         db_path = resolve_db(db_arg)
     except FileNotFoundError:
@@ -177,8 +177,8 @@ def main():
 
     # Search
     if args.facet and alphabet == AMINO_ALPHABET:
-        from facet_classify import facet_classify, export_classifications_tsv
-        from cross_family import find_missing_families, search_missing
+        from .facet_classify import facet_classify, export_classifications_tsv
+        from .cross_family import find_missing_families, search_missing
 
         classifications, verified_hits, legacy_hits = facet_classify(
             db_path, seq_block, seq_fasta, alphabet,
@@ -223,7 +223,10 @@ def main():
         hits_table = "facet_hits" if run_mode == "facet" else "legacy_hits"
         db_hits = load_hits(db_out, table=hits_table, database=db_arg)
         if db_hits:
-            results = classify_sequences(db_hits, config)
+            # Drop-in TEsorter mode: keep raw domain-count clade voting so
+            # output matches TEsorter exactly. The score-weighted vote is the
+            # default only in the main pipeline.py CLI.
+            results = classify_sequences(db_hits, config, compat_voting=True)
             store_classifications(conn, results, database=db_arg, mode=run_mode)
 
             # Export TEsorter-format cls.tsv
@@ -251,7 +254,7 @@ def main():
 
     # Generate TEsorter-format output files
     if config and results:
-        from tesorter_output import generate_all_outputs
+        from .tesorter_output import generate_all_outputs
         all_cls = results + (blast_cls if not args.disable_pass2 and 'blast_cls' in dir() else [])
         generate_all_outputs(
             conn, prefix, db_arg, args.sequence,

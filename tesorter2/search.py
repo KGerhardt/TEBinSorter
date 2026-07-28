@@ -22,7 +22,7 @@ import pyfastx
 import pyhmmer
 import pyhmmer.easel as easel
 
-from hmm import AMINO_ALPHABET
+from .hmm import AMINO_ALPHABET
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +112,60 @@ def _collect_hits(top_hits_iter):
         text = tophits_to_domtbl(top_hits, header=False)
         all_hits.extend(parse_domtbl_text(text))
     return all_hits
+
+
+def _normalize_nucl_hit(hit):
+    """
+    Put an nhmmer hit into the convention the rest of the pipeline expects.
+
+    nhmmer reports descending coordinates for minus-strand hits. Sort them
+    ascending and encode the strand in the target suffix, the same way
+    bath_search does, so _parse_frame_info recovers the base sequence and
+    strand. Frame is always 1 here: nucleotide models are not translated.
+    """
+    af, at = hit["ali_from"], hit["ali_to"]
+    ef, et = hit["env_from"], hit["env_to"]
+    hit["target_name"] = f"{hit['target_name']}|{'fwd1' if af <= at else 'rev1'}"
+    hit["ali_from"], hit["ali_to"] = sorted((af, at))
+    hit["env_from"], hit["env_to"] = sorted((ef, et))
+    return hit
+
+
+# E-value fields reported per hit; all share the same search-space scaling.
+_EVALUE_FIELDS = ("evalue", "c_evalue", "i_evalue")
+
+
+def legacy_search_nucl(hmms, seq_block):
+    """
+    Single-pass nobias search of DNA models against nucleotide sequence.
+
+    Uses nhmmer, the DNA-DNA tool, rather than hmmsearch. hmmsearch only
+    scores the strand it is handed, so it misses every minus-strand copy, and
+    it rejects sequences over pyhmmer's 100k-residue limit. nhmmer scans both
+    strands in one pass and handles long targets.
+
+    bias_filter is off to match legacy_search (TEsorter's --nobias).
+
+    E-values need care. Z does not mean the same thing to the two engines:
+    hmmsearch's -Z is a number of comparisons, while nhmmer's -Z is a database
+    size in megabases. On top of that, pyhmmer's nhmmer applies Z twice, giving
+    E = P * Z^2 where the nhmmer binary gives E = P * megabases.
+
+    Both formulas agree at Z=1, where each returns P, the E-value against a
+    1 Mb database. So ask for Z=1 and scale by the real database size here.
+    That reproduces the nhmmer binary exactly and keeps working if pyhmmer
+    fixes the double-scaling.
+    """
+    megabases = sum(len(s) for s in seq_block) / 1e6
+    hits = _collect_hits(pyhmmer.nhmmer(
+        hmms, seq_block,
+        bias_filter=False,
+        Z=1, E=1e10,
+    ))
+    for h in hits:
+        for field in _EVALUE_FIELDS:
+            h[field] *= megabases
+    return [_normalize_nucl_hit(h) for h in hits]
 
 
 def _partition_hmms_by_size(hmms):
@@ -389,7 +443,7 @@ def _init_worker(hmm_path, alphabet_str, seq_fasta):
     else:
         _worker_alphabet = easel.Alphabet.rna()
 
-    from hmm import load_hmms, build_optimized_profiles
+    from .hmm import load_hmms, build_optimized_profiles
     all_hmms = load_hmms(hmm_path)
     _worker_hmms_dict = {h.name: h for h in all_hmms}
     _worker_optimized = build_optimized_profiles(all_hmms, _worker_alphabet)

@@ -1,315 +1,429 @@
-# TEBinSorter
+# TEsorter2
+ 
+Fast, divergence-robust classification of transposable elements.
+ 
+TEsorter2 is a reimplementation of [TEsorter](https://github.com/zhangrengang/TEsorter) that
+keeps its classification semantics while introducing three major improvements:
+ 
+1. **Speed**: HMMER's limited parallelism is replaced by [pyHMMER](https://pyhmmer.readthedocs.io/)
+   with workload-aware load balancing, plus an optional facet pre-screen and a parallelized
+   second-pass BLAST.
+2. **Sensitivity on degraded copies**: an optional [BATH](https://github.com/TravisWheelerLab/BATH)
+   engine performs frameshift-aware translated search directly against nucleotide sequence.
+3. **Reproducibility**: clade assignment uses a score-weighted vote instead of a count-based vote
+   whose ties were broken by internal data-structure ordering.
+It also adds multi-database reconciliation in a single run and a genome mode for both engines.
 
-Near-perfect replication of [TEsorter](https://github.com/zhangrengang/TEsorter) at greatly improved speed. 
-
-Most differences in TESorter replication are the result of small bugfixes in TEBinSorter.
-
-Note: I should switch from default task (megablast) to dc-megablast. 
-
-## How it works
-
-TEsorter classifies transposable elements by searching translated sequences against HMM profile databases using HMMER's `hmmscan` with `--nobias`. This disables fast filtering for every sequence-model comparison, making the vast majority of runtime a waste: obvious non-hits are screened at full cost so that a handful of true positives aren't missed.
-
-TEBinSorter achieves acceleration through substantial architectural changes to almost every portion of the code.
-
-* Rather than HMMscan, TEBinSorter utilizes `hmmsearch` via [pyhmmer](https://pyhmmer.readthedocs.io/), which is generally more performant. E-value differences between HMMscan and HMMsearch are eliminated by parameterization to ensure identical results, just faster.
-* TEBinSorter utilizes intelligent parallel workload balancing to optimize the efficiency of searches and ensure near-perfect CPU utilization
-* TEBinSorter implements an alternative, optional algorithm for more rapidly searching protein databases (most of what TESorter uses) by pre-screening TEs to identify probable best hits before expensive searches are performed.
-
-Results are stored in a SQLite database, enabling post-hoc filtering and analysis without re-running searches. Run once, filter results at will.
-
-## Search modes
-
-### Default mode (exact TEsorter replication)
-
-Single-pass nobias `hmmsearch` against all models. Produces identical results to TEsorter but dramatically faster via:
-- `hmmsearch` instead of `hmmscan` (no per-sequence database reload)
-- In-process pyhmmer instead of subprocess calls
-- HMM model cost-aware parallel load balancing to prevent idle CPU time
-
-### Facet mode (`--facet`)
-
-For amino acid databases, uses spliced sub-HMMs ("facets") for fast pre-screening:
-
-1. **Facet screen**: Tiered sub-HMMs (96→64→48→32 amino acids) searched against all six translated protein reading frames of each input TE. Uniformly sized, perfect parallel load balance is intrinsic.
-2. **Targeted verification**: Top facet hit per domain family verified with single full-model nobias search.
-3. **Cross-family completion**: Classified frames searched for missing domain families.
-4. **Legacy fallback**: Unclassified frames (no facet signal) optionally get full nobias search.
-
-DNA databases (AnnoSINE) always use the default legacy search -- DNA facets do not provide sufficient sensitivity gains to justify the overhead.
-
-## Notes ##
-
-* All results reported by TEBinSorter ultimately emerge from identical HMM alignments to identical sequences with identical locations and hit probability metrics (e.g. E-values) using the same --nobias logic as the original; this guarantees that a hit found by TEBinSorter is bitwise identical to a hit found by TESorter. In the default mode, all hits are always 100% identical.
-* In the facets mode, TEBinSorter is finding a relatively small subset of all TESorter hits that are extremely likely to be the single best hit per input sequence. This means that the facets search finds less and stops looking at a sequence very quickly. However, after TESorter filters results, the filtering produces a subset of hits essentially identical (99.98%) to those found by TEBinSorter - TEBinSorter finds these hits directly instead of by post-processing from a completely exhaustive search and skips the cost of the exhaustive search on most sequences.
-
-## Benchmarks
-
-Rice TE library (2,431 sequences), 4 processors.
-
-**Important caveat:** TEsorter baseline times were measured on WSL2 (Windows Subsystem for Linux), which has known I/O and process-spawning overhead compared to native Linux. TEsorter's architecture (many subprocess calls to hmmscan, heavy temp file I/O) is disproportionately affected by this. The true speedup on native Linux may be smaller. TEBinSorter times are also WSL2 but its architecture (in-process pyhmmer, minimal disk I/O) is less sensitive to this penalty. I'm going to measure a true comparsion a bit later - the numbers will not be nearly as impressive as they appear here, unless you too are running the program on WSL.
-
-### Default mode
-
-| Database | Models | TEsorter | TEBinSorter | Speedup |
-|----------|--------|----------|-------------|---------|
-| TIR | 17 | 26m 41s | 1.0s | ~1,601x |
-| LINE | 28 | 56m 45s | 1.8s | ~1,892x |
-| SINE | 87 (excl. SINE_SO) | ~30m | 10.4s | ~173x |
-| REXdb | 266 | >2h | 18.9s | >381x |
-| GyDB | 314 | >2h | 18.7s | >385x |
-
-All 5 databases searched in **50 seconds** total search time, **54 seconds** wall clock (4 processors). SINE_SO excluded by default.
-
-### Facet mode (amino acid databases)
-
-Rice TE library, REXdb (266 models), with cross-family completion:
-
-| Metric | Value |
-|--------|-------|
-| Post-filter family recall vs default | 99.8% |
-| Misses | 4 out of 2,090 |
-| Facet build + screen | 11.4s |
-| Verification | 2.4s |
-| Cross-family completion | 3.3s |
-| Legacy fallback | 1.2s |
-
-### Verification against TEsorter
-
-Tested on the rice6.9.5.liban TE library (2,431 sequences). Default mode results filtered using TEsorter's exact thresholds (`coverage >= 20`, `evalue <= 1e-3`, `probability >= 0.5`, `normalized score >= 0.1`) and compared at the (sequence, model) pair level. Run with --compat-tesorter-rounding for demonstration purposes.
-
-| Database | TEsorter pairs | TEBinSorter pairs | Common | TEsorter only | Notes |
-|----------|---------------|-------------------|--------|---------------|-------|
-| TIR | 430 | 430 | 430 | 0 | Perfect match |
-| LINE | 806 | 806 | 806 | 0 | Perfect match |
-| REXdb | 2,787 | 2,787 | 2,787 | 0 | Perfect match |
-| GyDB | 7,496 | 7,496 | 7,496 | 0 | Perfect match |
-| SINE | 0 (TEsorter bug) | 731 | -- | -- | TEsorter forces `seq_type='prot'` for a DNA database |
-
-**Full pipeline (HMM + classifier + BLAST pass-2):** 572/584 exact classification match (97.9%) on rice REXdb. 10 diffs from principled score-ordered deconfliction (TEsorter uses arbitrary file-order iteration, which can cause a weaker hit to hold a domain slot against a stronger competitor). 2 misses: borderline sequences whose BLAST pass-2 classification depends on slight differences in the classified target pool.
-
-**Alignment coordinates:** Identical to TEsorter's GFF3 output
-
-**E-values:** Identical (Z set to match hmmscan convention).
-
-**TEsorter rounding bug:** TEsorter rounds `domain_score / model_length` to 2 decimal places before threshold comparison. This results in cases where 9.9 rounds -> 10 and therefore passes a TESorter filter it never should have. TEBinSorter uses full precision by default. `--compat-tesorter-rounding` replicates the old rounding behavior.
-
-### Large-scale benchmarks
-
-133,611 TE consensus sequences (concatenated filtered library), 10 processors, WSL2. The benchmark dataset is available on [Figshare](TODO: add DOI link after upload).
-
-#### Search timing: default vs facet mode
-
-Full pipeline (HMM search + classification + BLAST pass-2) on 4 amino acid databases:
-
-| Database | Models | Default | Facet | Speedup |
-|----------|--------|---------|-------|---------|
-| REXdb | 266 | 1001s | 488s | **2.1x** |
-| GyDB | 314 | 1272s | 926s | **1.4x** |
-| LINE | 28 | 66s | 76s | 0.9x |
-| TIR | 17 | 55s | 45s | 1.2x |
-| **Total wall clock** | | **42min 41s** | **26min 53s** | **1.6x** |
-
-Facet mode per-stage breakdown:
-
-| Database | Facet screen | Verify | Cross-family | Legacy fallback | Total |
-|----------|-------------|--------|-------------|----------------|-------|
-| REXdb (266) | 277s | 60s | 36s | 97s | 488s |
-| GyDB (314) | 546s | 103s | 72s | 185s | 926s |
-| LINE (28) | 32s | 8s | 0s | 34s | 76s |
-| TIR (17) | 17s | 9s | 0s | 18s | 45s |
-
-LINE and TIR have single-family databases, so no cross-family search is needed.
-
-#### Cross-database reconciliation
-
-Each database classifies independently, then cross-database results are reconciled by a **hierarchical weighted vote** at order → superfamily → clade. At every level, per-database calls are weighted by the summed normalized domain score (dom_score / model_len) across that database's filtered hits. The winning (order, superfamily, clade) bucket elects its highest-scoring entry as the primary; every per-database call remains available in the combined output's new `SecondaryHits` column, formatted as `db:order/superfamily/clade=score` in descending order of evidence strength.
-
-Pass `--compat-tesorter-output` to emit the combined `.cls.tsv` in the original 7-column TEsorter format (primary only). Per-database `{prefix}.{db}.cls.tsv` files are always TEsorter-format.
-
-#### Classification agreement: default vs facet mode
-
-45,690 sequences classified by default mode, 46,324 by facet mode (full pipeline: HMM search → cross-database reconciliation → BLAST pass-2). The default run includes AnnoSINE (259 SINE-only classifications); facet mode is AA-only so those do not appear on its side.
-
-| Metric | Count | % of common |
-|--------|-------|------------|
-| Sequences in both | 44,993 | — |
-| Exact match (order+superfamily+clade) | 40,282 | 89.5% |
-| Order+superfamily match | 43,547 | 96.8% |
-| Order match | 44,439 | 98.8% |
-| Order differs | 554 | 1.2% |
-| Default only | 697 | — |
-| Facet only | 1,331 | — |
-
-Per-database breakdown (each database classified independently, before reconciliation):
-
-| Database | Default | Facet | Common (%) | Exact match | Default only | Facet only |
-|----------|---------|-------|------------|-------------|-------------|------------|
-| REXdb | 38,951 | 38,653 | 38,629 (99.2%) | 33,927 (87.8%) | 322 | 24 |
-| GyDB | 37,738 | 37,243 | 37,205 (98.6%) | 32,118 (86.3%) | 533 | 38 |
-| LINE | 151 | 147 | 147 (97.4%) | 138 (93.9%) | 4 | 0 |
-| TIR | 19,512 | 19,489 | 19,489 (99.9%) | 19,489 (100%) | 23 | 0 |
-| SINE | 259 | — | — | — | — | — |
-
-TIR classifications are identical between modes. Overall, 4,711 combined-output rows disagree on the winning call; 3,265 of those (69.3%) are clade-only within the same order and superfamily, 892 are superfamily swaps within the same order, and 554 swap order.
-
-Of the clade-only differences, 67.3% involve an `unknown` or `mixture` call on one side — cases where one search found enough domains to resolve a specific clade and the other did not. The rest are swaps between closely related sister clades where the top two models score within a few bits: REXdb's Tcn1 ↔ chromo-outgroup (207 reciprocal) and Galadriel ↔ Reina (33) in the Gypsy chromo neighborhood; GyDB's gammaretroviridae ↔ epsilonretroviridae (362), pao ↔ sinbad (196), and Gypsy a_clade ↔ b_clade (140). At the per-database level REXdb's clade differences are 83.7% unknown/mixture resolution vs GyDB's 47.2% — GyDB's richer clade schema leaves more room for concrete-vs-concrete disagreement.
-
-Superfamily-level disagreements (892 sequences, all within the LTR order) are 59.3% `unknown`/`mixture` resolution. The remainder are genuine LTR-internal reassignments: Pao ↔ Bel-Pao (132), Gypsy ↔ Retrovirus (113), mixture ↔ Retroviridae (86). These arise when different databases register different LTR-element domain architectures that the hierarchical vote resolves differently under each search mode.
-
-Order-level disagreements (554 sequences, 1.2% of common) are dominated by LTR ↔ mixture (297) and LTR ↔ TIR (123). The TIR ↔ LTR transitions are residual Ginger cross-reactivity in sequences where the reconciliation's evidence totals are genuinely close — Ginger HMMs still hit real LTR retroelements, but the combined weight of rexdb + gydb LTR support normally outvotes them. These are genuinely borderline elements where neither answer is definitively correct.
-
-### SINE_SO: excluded by default
-
-The AnnoSINE database contains SINE_SO (M=4,176), an outlier model 6x larger than the next largest SINE model. Analysis of its contribution:
-
-| Dataset | SINE_SO raw hits | Survive TEsorter filters | % of AnnoSINE compute |
-|---------|-----------------|------------------------|----------------------|
-| Rice (2,431 seqs) | 2,674 | 0 | 71% |
-| 133k sequences | 207,554 | 1 | 71% |
-
-SINE_SO accounts for 71% of AnnoSINE's total M² compute cost but produces effectively zero usable hits after standard filtering. TEBinSorter excludes it by default:
-
-| Dataset | With SINE_SO | Without | Speedup |
-|---------|-------------|---------|---------|
-| Rice (4 proc) | 39.4s | 10.4s | 3.8x |
-| 133k seqs (10 proc) | 38.5min | 10.9min | 3.5x |
-
-Use `--include-sine-so` or `-d sine-so` to search it explicitly.
+Note: I should switch from default task (megablast) to dc-megablast.
 
 ## Installation
 
-### Dependencies
+### conda (recommended)
 
-- Python >= 3.10
-- [pyhmmer](https://pyhmmer.readthedocs.io/) >= 0.10
-- [pyfastx](https://github.com/lmdu/pyfastx) >= 2.0
-- numpy >= 2.0
+Installs the external binaries (HMMER, BLAST+) and TEsorter2 in one step:
 
 ```bash
-pip install pyhmmer pyfastx numpy
+git clone https://github.com/KGerhardt/TEsorter2.git
+cd TEsorter2
+conda env create -f environment.yml
+conda activate tesorter2
 ```
 
-### Clone
+### pip
+
+Requires Python >= 3.9. HMMER and BLAST+ must already be on `PATH`:
 
 ```bash
-git clone https://github.com/KGerhardt/TEBinSorter.git
-cd TEBinSorter
+pip install git+https://github.com/KGerhardt/TEsorter2.git
 ```
 
-## Usage
+### Databases
 
-### Basic search (default mode)
+The HMM databases (REXdb, GyDB2, LINE, TIR, AnnoSINE) ship inside the package, as they do in
+TEsorter, so there is no download step and no configuration: `tesorter2 input.fasta` works
+straight after install.
+
+To use a custom collection of HMM databases instead, point TEsorter2 at its directory:
 
 ```bash
-python3 src/pipeline.py input.fasta -d rexdb -p 4 -o output_dir
+tesorter2 input.fasta --db-dir /path/to/db     # or: export TESORTER2_DB=/path/to/db
 ```
 
+Individual databases can also be passed by path: `-d /path/to/custom.hmm`.
+
+### BATH (optional, only for `--bath`)
+
+[BATH](https://github.com/TravisWheelerLab/BATH) is not available on conda and must be built from
+source. Put `bathsearch`/`bathconvert` on `PATH`, or set `BATH_BIN_DIR`.
+
+## Choosing an engine
+ 
+| | Element mode (pre-extracted TEs) | Genome mode (assembly) |
+|---|---|---|
+| **Intact / low-divergence sequence** | **pyHMMER** (default) : fastest | **pyHMMER** or **BATH** |
+| **Degraded / frameshifted copies** | **BATH** (`--bath`) : slower than pyHMMER, more sensitive | **BATH** (`--bath`) : both faster *and* more sensitive |
+
+---
+ 
+## Search modes
+ 
+### Default mode (pyHMMER)
+ 
+Single-pass `--nobias` search against all models via pyHMMER, in-process: `hmmsearch` for
+amino-acid databases, `nhmmer` for DNA databases (`sine`, `sine-so`).
+ 
+- Model-cost-aware parallel load balancing chooses between pyHMMER's `queries` and `targets`
+  parallelization per model bin, reaching near-full CPU utilization (see
+  [Parallel strategy](#parallel-strategy)).
+- Results are written to a SQLite database, so filtering and re-analysis do not require re-running
+  the search.
+  
+### DNA databases (nhmmer)
+
+DNA profile databases are searched with `nhmmer`, not `hmmsearch`. `hmmsearch` only scores the
+strand it is handed, so it misses every minus-strand copy, and pyHMMER rejects sequences over
+100k residues outright. `nhmmer` scans both strands in one pass and handles long targets.
+
+On 5 Mb of rice against `sine`, nhmmer records hits on both strands (15,992 `+` / 15,821 `-`)
+where hmmsearch records no strand at all, and classifies 48 windows against hmmsearch's 37.
+
+`--dna-engine hmmsearch` restores the old single-strand behaviour for comparison.
+
+### Facet mode (`--facet`)
+ 
+Pre-screens amino-acid databases with spliced sub-HMMs ("facets") to route each sequence only to
+the models likely to produce its best hit:
+ 
+1. **Facet screen**: tiered sub-HMMs (96 → 64 → 48 → 32 aa) searched against all six translated
+   frames.
+2. **Targeted verification**: top facet hit per domain family verified with a full-model
+   `--nobias` search.
+3. **Cross-family completion**: verified frames searched for missing domain families.
+4. **Legacy fallback**: frames with no facet signal get a full search.
+DNA databases always use the default search (nhmmer); DNA facets do not repay their overhead.
+Incompatible with `--bath` and `--genome`.
+ 
+### BATH mode (`--bath`)
+ 
+Replaces pyHMMER with `bathsearch --fs` for amino-acid databases. BATH aligns protein pHMMs
+directly against raw nucleotide input, allowing the alignment to change frame at indels and read
+through stop codons under a frameshift penalty, so a domain interrupted by a frameshift is
+recovered as a single hit with its true extent. No six-frame translation is performed.
+ 
+- HMMER3 databases are converted on first use (`bathconvert`) and cached as `{db}.bath.hmm`.
+- Hits are normalized into the same internal schema as the HMMER path, so classification,
+  reconciliation and BLAST pass-2 are unchanged.
+- BATH tblout reports no per-residue posterior probability, so `acc` is set to `1.0` and the
+  minimum-accuracy filter is a no-op for BATH hits.
+- Minus-strand coordinates are normalized to ascending order, with strand encoded in the target
+  suffix, matching the HMMER convention.
+- Incompatible with `--facet`.
+- 
+### Genome mode (`--genome`)
+ 
+Treats the input as whole-genome sequence rather than pre-extracted elements: detects TE protein
+domains throughout, classifies **each domain individually**, resolves overlapping features, and
+emits a domain-level GFF3 plus a summary table. It does not produce a per-element `.cls.tsv` and
+does not run BLAST pass-2, matching TEsorter's `-genome` behaviour.
+ 
+- **pyHMMER**: six-frame translates each window, then maps amino-acid envelope coordinates back to
+  nucleotide space. Window size is capped automatically to stay under pyHMMER's 100k-residue
+  per-sequence limit; the retained overlap exceeds any TE domain, so no domains are lost.
+- **`--bath`**: runs `bathsearch --fs` directly on nucleotide windows. The tblout already reports
+  nucleotide coordinates and strand, so no translation or coordinate back-mapping is needed. BATH
+  additionally streams long targets in ~0.25 Mb blocks overlapped by the maximum expected hit
+  length, reconciling boundary duplicates internally.
+Window size: `--win-size` (default `1e6`), `--win-ovl` (default `1e5`).
+Requires at least one amino-acid database; DNA-only databases (`sine`) are skipped.
+Incompatible with `--facet`.
+ 
 ### Multiple databases
+ 
+TEsorter2 accepts several databases in one run (`-d rexdb,gydb`) and reconciles them in three
+stages:
+ 
+1. **Independent classification**: each database classifies every element on its own, emitting a
+   per-database `{prefix}.{db}.cls.tsv` in native TEsorter format.
+2. **Name harmonization**: per-database calls are projected onto a unified taxonomy that collapses
+   superfamily synonyms (e.g. `Pao` → `Bel-Pao`) and unifies clade names. Lineages with no
+   established equivalent are kept distinct to avoid spurious agreement.
+3. **Scope-aware hierarchical reconciliation**: a hierarchical vote at Order → Superfamily →
+   Clade. At each level candidate labels are weighted by the summed normalized domain score per
+   database, and only entries consistent with the winning label advance. The superfamily level is
+   *scope-aware*: a database may only elect a superfamily it models with at least 2 clades.
+Every per-database call is retained in the `SecondaryHits` column as
+`db:order/superfamily/clade=score`, in descending order of evidence. Use `--compat-tesorter-output`
+for the original 7-column format.
+ 
+### Sequence Ontology
 
-```bash
-python3 src/pipeline.py input.fasta -d rexdb,gydb,tir -p 4 -o output_dir
+`Order/Superfamily/Clade` is TEsorter's vocabulary, not a standard one. Every classification is
+also resolved to a [Sequence Ontology](http://www.sequenceontology.org) term, so results are
+comparable with other annotation tools:
+
+- `{prefix}.cls.tsv` gains `SO_name` and `SO_ID` columns (e.g. `Copia_LTR_retrotransposon`,
+  `SO:0002264`).
+- Genome-mode GFF3 features carry `Ontology_term=SO:...` plus `so_name=`. The feature type stays
+  `CDS`: these features are protein domains, not elements, so typing one as
+  `Gypsy_LTR_retrotransposon` would assert the domain *is* the retrotransposon.
+
+The mapping authority is [EDTA's `TE_Sequence_Ontology.txt`](https://github.com/oushujun/EDTA/blob/master/bin/TE_Sequence_Ontology.txt),
+bundled in `tesorter2/data/`. All 59 Order/Superfamily labels the bundled databases can emit
+resolve to a specific SO term; nothing falls back to the generic `repeat_region`.
+
+For lineages with no SO term of their own, EDTA files a descriptive name under a generic
+accession (`CR1_LINE_retrotransposon` is not a real SO term; its `SO:0000194` is
+`LINE_element`'s). `SO_name` keeps EDTA's name for interoperability, while anything written as an
+ontology term resolves to the real one.
+
+`--compat-tesorter-output` suppresses the SO columns, keeping the original 7-column format.
+
+### Clade voting
+ 
+Within each database the winning clade is chosen by a **score-weighted vote**: each domain
+contributes a length-normalized score (`dom_score / model_len`) to its clade, and the highest
+summed score wins:
+ 
+$$\hat{c} = \arg\max_{c} \sum_{d \in D_c} \frac{\text{score}_d}{\text{len}_d}$$
+ 
+Normalizing by model length controls for the tendency of longer profiles to accumulate higher raw
+scores, making domains comparable. Ties fall through to the existing mixture/completeness rules;
+Order and Superfamily are inherited from the winning clade.
+ 
+This replaces TEsorter's raw domain-count plurality, which breaks ties by position in an internal
+collection rather than by any biological signal, causing sibling-clade swaps (Reina↔Tekay,
+Ale↔Alesia) to flip depending on search engine. Pass `--compat-tesorter-voting` to restore the
+original behaviour.
+ 
+---
+
+## CLI reference
+ 
 ```
-
-### All databases
-
-```bash
-python3 src/pipeline.py input.fasta --max-search -p 4 -o output_dir
+tesorter2 <sequence> [options]
 ```
+ 
+| Flag | Default | Description |
+|---|---|---|
+| `sequence` | — | Input FASTA (TE library, or genome with `--genome`) |
+| `-d`, `--database` | `rexdb` | Comma-separated database aliases or paths |
+| `--max-search` | off | Search against all bundled databases |
+| `-o`, `--outdir` | `{input}.TEsorter2` | Output directory |
+| `--db-dir` | bundled | Directory holding the HMM databases (see Installation) |
+| `--dna-engine` | `nhmmer` | Engine for DNA databases (`nhmmer` or `hmmsearch`) |
+| `--prefix` | input basename | Output file prefix |
+| `-p`, `--processors` | `4` | Processors |
+| `--facet` | off | Facet pre-screen mode (AA databases only) |
+| `--bath` | off | Frameshift-aware BATH engine (AA databases only) |
+| `--genome` | off | Genome mode: domain-level annotation + GFF3 |
+| `--win-size` | `1e6` | Genome mode window size |
+| `--win-ovl` | `1e5` | Genome mode window overlap |
+| `--emit-bath` | off | Emit routed FASTA partitions for BATH to `{outdir}/BATHwater/` |
+| `--include-sine-so` | off | Include the SINE_SO model in AnnoSINE searches |
+| `--compat-tesorter-voting` | off | Raw domain-count clade vote (TEsorter behaviour) |
+| `--compat-tesorter-rounding` | off | Round normalized scores to 2 dp before filtering (replicates a TEsorter bug) |
+| `--compat-tesorter-output` | off | Emit combined `.cls.tsv` in TEsorter's 7-column format |
 
-### Facet mode (faster, AA databases only)
-
-```bash
-python3 src/pipeline.py input.fasta -d rexdb --facet -p 4 -o output_dir
-```
-
-DNA databases automatically fall back to default mode when `--facet` is specified.
-
-## Databases
-
-TEBinSorter auto-detects database alphabet (amino acid or DNA) from the HMM file. Built-in aliases:
-
-| Alias | Database | Alphabet |
-|-------|----------|----------|
-| `rexdb` | REXdb v4.0 + metazoa v3.1 | amino |
-| `gydb` | GyDB 2.0 | amino |
-| `line` | Kapitonov et al. LINE RT | amino |
-| `tir` | Yuan & Wessler TIR TPase | amino |
-| `sine` | AnnoSINE | DNA |
-
-Custom HMM databases can be passed as file paths in the `-d` argument. Pre-computed similarity graphs are generated automatically on first use and cached alongside the HMM file.
-
+---
+ 
 ## Output files
-
+ 
 | File | Description |
-|------|-------------|
-| `{prefix}.db` | SQLite database with all results (hits, classifications, BLAST) |
-| `{prefix}.aa` | Six-frame translated amino acid sequences (indexed) |
-| `{prefix}.{db}.cls.tsv` | Per-database TE classifications (order, superfamily, clade, completeness) |
-| `{prefix}.cls.tsv` | Combined classifications across all databases + BLAST pass-2 |
-| `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (facet mode) |
+|---|---|
+| `{prefix}.db` | SQLite database with all hits, classifications and BLAST results |
+| `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
+| `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
+| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
+| `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
+| `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
+| `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
+| `{prefix}.genome.summary.tsv` | Genome mode: Order/Superfamily/Clade tallies |
 | `blast_pass2/` | BLAST database and query chunks (temporary) |
+| `cut.fa` | Genome mode: windowed genome (temporary) |
+ 
+---
+ 
+## Benchmarks
+ 
+All runs on an ANVIL CPU node (Rosen Center for Advanced Computing, Purdue University;
+AMD EPYC 7763, 256 GB RAM), 16 threads, mean ± SD over 3 replicates. BATH in frameshift-aware
+mode (`--fs`).
+ 
+### Element mode
+ 
+108,318 RepBase elements (LTR, TIR, LINE), each searched against its order-specific database
+(GyDB, REXdb-pnas, REXdb-line).
+ 
+| Pipeline | Engine | Time | Speedup vs TEsorter |
+|---|---|---|---|
+| TEsorter | HMMER (`hmmscan`) | 2,932 s | 1.0× |
+| **TEsorter2** | **pyHMMER** | **543 s** | **5.4×** |
+| TEsorter2 | BATH | 983 s | 3.0× |
+ 
+### Genome mode
+ 
+Complete *Oryza sativa* genome (~375 Mb) against REXdb.
+ 
+| Pipeline | Engine | Time | Speedup vs TEsorter |
+|---|---|---|---|
+| TEsorter | HMMER (`hmmscan`) | 2,127 s | 1.0× |
+| TEsorter2 | pyHMMER | 988 s | 2.2× |
+| **TEsorter2** | **BATH** | **431 s** | **4.9×** |
+ 
+BATH is 2.3× faster than pyHMMER here because it avoids the six-frame translation and coordinate
+back-mapping that dominate the HMMER path on long sequences.
 
+---
+ 
+## Output files
+ 
+| File | Description |
+|---|---|
+| `{prefix}.db` | SQLite database with all hits, classifications and BLAST results |
+| `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
+| `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
+| `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
+| `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
+| `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
+| `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
+| `{prefix}.genome.summary.tsv` | Genome mode: Order/Superfamily/Clade tallies |
+| `blast_pass2/` | BLAST database and query chunks (temporary) |
+| `cut.fa` | Genome mode: windowed genome (temporary) |
+ 
+---
+ 
+TEsorter2 | BATH | 983 s | 3.0× |
+
+---
+
+## TEsorter compatibility
+ 
+`tesorter2-compat` provides a drop-in CLI with TEsorter's original argument names and
+defaults (including count-based clade voting), for substituting TEsorter inside existing pipelines:
+ 
+```bash
+tesorter2-compat input.fasta -db rexdb -p 16 -pre out
+```
+ 
+Supported: `-db/--hmm-database`, `--db-hmm`, `-st/--seq-type`, `-pre/--prefix`, `-p/--processors`,
+`-tmp/--tmp-dir`, `-cov/--min-coverage`, `-eval/--max-evalue`, `-prob/--min-probability`,
+`-score/--min-score`, `-dp2/--disable-pass2`, `-nolib/--no-library`, `-norc/--no-reverse`,
+`-nocln/--no-cleanup`, plus `--facet`.
+ 
+---
+ 
 ## Architecture
-
-### Core modules
-
-- **`pipeline.py`** — Main CLI and search orchestration
+ 
+### Core
+ 
+- **`pipeline.py`** — CLI and search orchestration
 - **`search.py`** — HMM search engine with balanced parallelism
 - **`sequence.py`** — FASTA ingestion (pyfastx) and six-frame translation (pyhmmer)
 - **`hmm.py`** — HMM loading, alphabet detection, optimized profile construction
+- **`bath_search.py`** — BATH engine: conversion, `bathsearch --fs` invocation, hit normalization
+- **`genome.py`** — Genome mode: windowing, per-domain classification, overlap resolution, GFF3/summary
 - **`results.py`** — SQLite persistence with pre-parsed columns (base_seq, strand, frame, domain_type)
-- **`deconflict.py`** — Numpy-based hit deconfliction and parameterized filtering
-
+- **`deconflict.py`** — numpy-based hit deconfliction and parameterized filtering
 ### Facet classification
-
-- **`decompose_hmm.py`** — Standalone sub-HMM decomposition and splicing. Tiered window sizes, configurable overlap. Works with DNA and amino acid HMMs.
-- **`model_graph.py`** — Cross-HMM-model similarity graph. Pre-built for all databases. Contains a record of how similar each HMM record is to all the other records in the database.
-- **`facet_classify.py`** — Facet screen → verification → cross-family completion → legacy fallback
-- **`cross_family.py`** — Targeted search for missing domain families in classified frames
-
+ 
+- **`decompose_hmm.py`** — standalone sub-HMM decomposition and splicing (tiered windows,
+  configurable overlap; works for DNA and AA HMMs)
+- **`model_graph.py`** — cross-model similarity graph, precomputed for bundled databases
+- **`facet_classify.py`** — screen → verify → cross-family completion → legacy fallback
+- **`cross_family.py`** — targeted search for missing domain families in classified frames
 ### Classification and post-processing
+ 
+- **`classifier.py`** — config-driven classification from domain hits; per-database domain
+  remapping, overlap-aware deconfliction, order/superfamily/clade assignment
+- **`blast_pass2.py`** — parallel chunked BLAST pass-2 with cross-database target pooling
+- **`tesorter_output.py`**, **`emit.py`**, **`id_registry.py`** — output formatting and identifier bookkeeping
+---
+ 
+## Extended methods
+ 
+### HMM facets
+ 
+pyHMMER exposes an HMM's emission probabilities in Python. TEsorter2 uses them to locate conserved
+subregions that most influence HMMER's decision-making, and extracts each such region into a
+"facet": a complete, self-contained HMM whose emission and transition probabilities are cloned from
+its parent over the corresponding window.
+ 
+Facets are sized at 96, 64, 48 or 32 amino acids, using the longest size the parent supports;
+models of ≤32 aa are used as-is. Windows are chosen to maximize the summed emission probability
+over the parent and may overlap by at most 33% of facet length.
+ 
+For a parent HMM of length *M* and a query of length *N*, one `hmmsearch` is a dynamic-programming
+matrix of size *M × N*. A facet search replaces *M* with a facet size *F* (*F* < *M*), yielding an
+*F × N* slice with a proportional reduction in work. Three properties make this profitable:
+ 
+- **Short models are more decisive.** A full-length model accumulates information about search
+  effort across the whole sequence; a short model confirms or rejects a local region quickly.
+- **Facet scores predict full-length scores.** A good facet hit almost always implies a good
+  full-length hit, making facets a fast approximation of the final score.
+- **Facet sizes pack SIMD lanes.** 96/64/32 aa are consumed in 16-aa bites by HMMER's internals,
+  reducing low-level CPU waste relative to less divisible sizes.
+Facets do not reproduce their parent's domain detections exactly, so a full-length verification is
+still required for correctness. The acceleration comes from *skipping* verifications: the TE HMMs
+within each database are highly redundant (either wholly, as in single-type databases, or in
+subcollections, as in REXdb and GyDB), so most models in a cluster hit the same sequence at
+differing strengths and all but the best are discarded downstream anyway — yet detecting a weak hit
+costs exactly as much as detecting a strong one. TEsorter2 ships precomputed all-vs-all similarity
+graphs (obtained by searching each model's consensus against every other model in the database)
+that identify these clusters. Facet hits order the parent searches within each cluster from highest
+to lowest, and verification stops as soon as a high-scoring parent is confirmed — typically 1–2
+parent searches per cluster per sequence instead of dozens.
+ 
+In effect, the deconfliction that would otherwise happen *after* an exhaustive search is moved
+*before* it, at the cost of a cheap approximate screen. Post-filter agreement with the exhaustive
+search is 99.98% at hit level and 99.8% at family recall (4 misses of 2,090 on rice REXdb).
+ 
+The facet generation code is intentionally a separate module and is reusable in other projects.
+ 
+### Parallel strategy
+ 
+**Default search.** pyHMMER exposes two C-level parallelization schemes: `queries`, where each
+thread takes one HMM and searches it against all sequences, and `targets`, where one sequence is
+searched against models in parallel. `queries` is inherently more efficient unless there are few
+models.
+ 
+HMM runtime scales roughly with *M²*, so a single long model can dominate. AnnoSINE is the
+pathological case: `SINE_SO` (M≈4,100) accounts for ~71% of the model set's runtime, and under
+`queries` parallelism every other model finishes quickly while `SINE_SO` runs single-threaded for
+>10× longer than all the rest combined.
+ 
+TEsorter2 precomputes each model's expected cost (*M²*) and bins them: **small** models
+(cost ≤ 75th percentile + 2×IQR for that database) run in `queries` mode; **large** models run in
+`targets` mode. Sequences are reused from the same in-memory object across both searches, so the
+split is essentially free, yielding near-full CPU utilization in the most efficient mode available
+for each model class.
+ 
+**Facet search.** Staged: facets from all models are searched with `--nobias` exactly as in the
+default search; top facet hits per sequence are ordered by quality, noting each facet's parent;
+each sequence is searched against its best facet's parent at full length. If it verifies, no
+further searches run; otherwise the next-best facet hit for a *different* parent is tried. Most
+sequences verify on the first attempt; almost all within three. Because verification stops at a
+single best hit, a cross-family pass then searches each verified sequence against the top facet
+hit's parent for every *other* TE family, preserving both primary and secondary labelling
+sensitivity. Sequences still unclassified fall back to the legacy search.
+ 
+The expensive part of HMMER is finding a match. Facets route each sequence only to the models
+likely to produce its best hits, skipping the redundant weak hits that would be discarded anyway.
+The leftovers sent to the legacy search are mostly genuine rejects with no TE signal, and are
+cheap: a REXdb legacy search spends ~92% of its runtime on the ~71k of ~880k protein frames that
+actually contain hits.
+ 
+---
 
-- **`classifier.py`** — Config-driven TE classification from domain hits. Per-database rules for domain remapping, overlap-aware deconfliction, order/superfamily/clade assignment.
-- **`blast_pass2.py`** — BLAST-based pass-2 classification for HMM-unclassified sequences. Parallel chunked BLAST with cross-database target pooling.
 
-# Extended methods
 
-## HMM facets
+## License
 
-The concept of an HMM facet is one I've been exploring for other projects but found a use for in this one. By utlizing pyhmmer, we can observe the emission probabilities of an HMM model in a friendly manner in Python. I use these emission probabilities to find conserved subregions of the HMM model which are highly influential in the decisionmaking process of HMMer to actually search a sequence. These high-influence regions are extracted to form a "facet," whose emission probabilities are cloned from the original's over the corresponding window. There are multiple advantages to this approach:
+GPL-3.0-or-later. See [LICENSE](https://github.com/KGerhardt/TEsorter2/blob/master/LICENSE).
 
-* Short models tend towards specificity. A full-length model will make an effort to compile information about required search effort across an entire sequence, while short models confirm or reject a local region quickly. Facets encoding the same number of amino acids as their parent tend nonetheless to search the same sequence more quickly by parts than the original model.
-* Much of the information that the full-length model would glean about the appropriateness of a search from a long view of a sequence is extremely highly correlated with what a good facet will report. A good facet hit almost ensures a good full-length model hit.
-* Facets can be intelligently sized so that they exactly pack SIMD lanes (96, 64, 32 amino acids, get consumed mostly in 16-AA sized bites) in the HMMer internals. This reduces low-level CPU waste compared to less politely divisible sizes of sequence.
-
-Are they mathematically correct or statistically sound? I honestly have no idea. But they work.
-
-For completeness, the facet generation code is intentionally a separate module from the remainder of TEBinSorter. It can be used in other projects.
-
-## Parallel strategy
-
-### Legacy (default) search
-
-PyHMMer exposes hmmsearch behavior with two internal, C-level parallelization schemes. These are "queries", corresponding with a search parallelized over the HMM models where each thread picks up one HMM model and searches it against all input sequences, and a "targets" mode where one sequence is searched against each HMM model in parallel. Queries parallelism is inherently more efficient, unless there are only a few models. 
-
-HMM model runtimes scale approximately with their model length M^2. Longer models can therefore dominate runtime despite being only "one" model. AnnoSINE has exactly such a case - the SINE_SO HMM model has a length of ~4100 bp and accounts for ~71% of the total runtime of the SINE model set. When the "queries" parallel mode is used, what ends up happening is that all of the other HMMs in annosine finish rather quickly, and SINE_SO runs single-threaded for usually >10x longer than all the rest of the models took put together. Using the original HMMer, you can provide more threads to a single model - it alleviates the problem somewhat, but HMMer's own internal parallelism is not very efficient.
-
-TEBinSorter wrangles this problem by caclulating the expected runtime cost of each HMM model in a database in advance (cost=M^2), and grouping them into one bin of "close enough in size to run in 'queries' mode" and one bin of "large models that benefit from 'targets' mode. Small models are those whose M^2 is <= the 75th percentile + (2 x IQR) among model costs for that database. Large models are any others.
-
-This all effects low-overhead, near-perfect parallelism in the most efficient available modes. Sequences are reused from the same in-memory object for both searches, so there is essentially no cost to this process.
-
-### Facets search
-
-The facets search is staged:
-
-- Extracted facets from all models are searched with --nobias settings exactly like the full sequences are in the legacy search
-- The top facet hits for each sequence are ordered by hit quality, noting the parent HMM model that the facet hit corresponds to.
-- Each sequence is searched against its top scoring facet's parent at full length using --nobias. This is exactly the same search that the legacy module does, just targeted instead of exhaustive
-- If a sequence lands a full-length model hit, it is "verified" and no further searches are done. If not, the next best scoring facet hit for a different parent HMM model is used. The process repeats until the sequence verifies, or falls out. Most sequences verify against their first facet hit. Almost all verify within 3.
-- Because the verification stops at a single best hit, it's possible a sequence may have domains marked by a different family of TEs which are not reached by way of the facet search + verification. The cross-domain search module takes each verified facet hit and searches the same sequence against the parent model associated with the top facet hit of each other TE family. This ensures that the sequence gets both primary and secondary labelling sensitivity both within and across TE families.
-- Finally, the remaining sequences which are unclassified by this point, including those with facet hits but which failed any level of verification, are searched in legacy mode.
-
-The expensive parts of HMMer occur exactly when a match is found. What the facets search does is relatively inexpensively route each sequence to exactly and only the HMM models likely to produce its best hits. This saves expensive, and for TEs extremely repetitive, search costs. Most HMM models within the same TE family, e.g. SINEs, will all hit the same sequence at differing strengths. This is exactly when HMMer will burn a lot of runtime, but all of the weaker hits would be discarded later, anyway. It's better (faster) to not do them at all.
-
-The remnant sequences shunted to the legacy search are mostly genuine rejects with no TE signal according to the TESorter databases. These are comparatively inexpensive searches - for example, a rexDB legacy search spends ~92% of its runtime finding the hits within just 71k of about 880k protein frames in our largest testing dataset. They are, mostly, quickly rejected by every model. In a facets search, only the ~6% of sequences missed by the facets have real costs to searching in this way. This is the other major location where a facets search saves time.
+The bundled HMM databases (REXdb, GyDB2, AnnoSINE, Kapitonov LINE, Yuan & Wessler TIR) are
+third-party data with their own upstream licenses — CC BY 4.0 (REXdb), Creative Commons
+Attribution (GyDB2), MIT (AnnoSINE), and redistribution via TEsorter/GPL-3.0 (Kapitonov LINE,
+Yuan & Wessler TIR). TEsorter2's GPL-3.0 does **not** extend to them. Per-database licenses,
+sources, and required citations are in
+[`tesorter2/database/LICENSES.md`](https://github.com/KGerhardt/TEsorter2/blob/master/tesorter2/database/LICENSES.md); cite the databases you run
+against.

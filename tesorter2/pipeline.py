@@ -10,20 +10,23 @@ import logging
 import os
 import time
 
-from hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
-from search import build_sequence_block, legacy_search
-from sequence import translate_fasta, open_input
-from results import (create_db, store_sequences, store_legacy, store_facet,
+from .paths import get_db_dir
+from .hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
+from .search import build_sequence_block, legacy_search, legacy_search_nucl
+from .sequence import translate_fasta, open_input
+from .results import (create_db, store_sequences, store_legacy, store_facet,
                      index_hits_tables, finalize_db,
                      FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
                      FACET_STAGE_LEGACY_FALLBACK)
-from facet_classify import (facet_classify, facet_classify_v2,
+from .facet_classify import (facet_classify, facet_classify_v2,
                             export_classifications_tsv)
-from cross_family import find_missing_families, search_missing, search_missing_v2
-from classifier import (classify_sequences, export_classification_tsv,
+from .cross_family import find_missing_families, search_missing, search_missing_v2
+from .classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, reconcile_classifications,
                        DB_CONFIGS)
-from blast_pass2 import blast_pass2
+from .blast_pass2 import blast_pass2
+from . import bath_search
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,11 +34,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Known database aliases -> paths relative to TEsorter database dir
-DB_DIR = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)),
-    "..", "database",
-)
+# Database directory: the databases ship inside the package. Override with
+# --db-dir or TESORTER2_DB to point at a custom collection.
+DB_DIR = get_db_dir()
 
 DB_ALIASES = {
     "rexdb":    "REXdb_protein_database_viridiplantae_v4.0_plus_metazoa_v3.1.hmm",
@@ -47,21 +48,23 @@ DB_ALIASES = {
 }
 
 
-def resolve_db(name):
+def resolve_db(name, db_dir=None):
     """Resolve a database name or alias to an absolute path."""
     if os.path.isfile(name):
         return os.path.abspath(name)
     if name in DB_ALIASES:
-        path = os.path.join(DB_DIR, DB_ALIASES[name])
+        base = db_dir or DB_DIR
+        path = os.path.join(base, DB_ALIASES[name])
         if os.path.isfile(path):
             return os.path.abspath(path)
-        raise FileNotFoundError(f"Database alias '{name}' -> {path} not found")
+        raise FileNotFoundError(
+            f"Database alias '{name}' -> {path} not found under {base}")
     raise FileNotFoundError(f"Database '{name}' not found (not a file or known alias)")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        prog="TEBinSorter",
+        prog="tesorter2",
         description="Fast TE classification using HMM profile databases. "
                     "Default mode produces results identical to TEsorter.",
     )
@@ -80,6 +83,29 @@ def parse_args():
         action="store_true",
         default=False,
         help="Search against all known databases",
+    )
+    parser.add_argument(
+        "--genome",
+        action="store_true",
+        default=False,
+        help="Genome mode: input is genome sequence(s). Windows the genome, "
+             "detects TE protein domains throughout, classifies each domain "
+             "individually, and emits a feature-level GFF3 + summary table "
+             "(no per-element .cls.tsv, no BLAST pass-2). Works with the "
+             "default HMMER engine and with --bath. DNA databases (e.g. sine) "
+             "are searched with nhmmer to find non-coding elements too.",
+    )
+    parser.add_argument(
+        "--win-size",
+        type=float,
+        default=1e6,
+        help="Genome mode: window size for chunking [default: 1e6]",
+    )
+    parser.add_argument(
+        "--win-ovl",
+        type=float,
+        default=1e5,
+        help="Genome mode: window overlap [default: 1e5]",
     )
     parser.add_argument(
         "--facet",
@@ -102,7 +128,21 @@ def parse_args():
     parser.add_argument(
         "-o", "--outdir",
         default=None,
-        help="Output directory [default: {input}.TEBinSorter]",
+        help="Output directory [default: {input}.TEsorter2]",
+    )
+    parser.add_argument(
+        "--db-dir",
+        default=None,
+        help="Directory containing the HMM databases "
+             "[default: the databases bundled with the package]",
+    )
+    parser.add_argument(
+        "--dna-engine",
+        choices=("nhmmer", "hmmsearch"),
+        default="nhmmer",
+        help="Engine for DNA databases. nhmmer scans both strands and handles "
+             "long targets; hmmsearch only scores the strand it is given and "
+             "is limited to 100k-residue sequences. [default: nhmmer]",
     )
     parser.add_argument(
         "--prefix",
@@ -123,6 +163,27 @@ def parse_args():
         default=False,
         help="Emit routed FASTA partitions for the BATH aligner. "
              "Output goes to {outdir}/BATHwater/ directory.",
+    )
+    parser.add_argument(
+        "--bath",
+        action="store_true",
+        default=False,
+        help="Use the BATH aligner (frameshift-aware translated nucleotide "
+             "search) instead of pyhmmer/HMMER for amino-acid databases. "
+             "Runs bathsearch --fs on the raw nucleotide input (no six-frame "
+             "translation). BATH covers protein profiles only, so DNA "
+             "databases (AnnoSINE) still go through nhmmer. "
+             "Set BATH_BIN_DIR if bathsearch/bathconvert are not on the "
+             "default path.",
+    )
+    parser.add_argument(
+        "--compat-tesorter-voting",
+        action="store_true",
+        default=False,
+        help="Decide the clade by raw domain-count plurality, replicating "
+             "TEsorter exactly. Default is a score-weighted clade vote (summed "
+             "normalized domain score), which resolves sibling-clade swaps that "
+             "TEsorter breaks arbitrarily on tied vote counts.",
     )
     parser.add_argument(
         "--include-sine-so",
@@ -153,9 +214,13 @@ def parse_args():
 
 
 def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
-                        facet_fallback=False):
+                        facet_fallback=False, dna_engine="nhmmer"):
     """
     Exhaustive single-pass nobias search against all models.
+
+    DNA-alphabet databases go through nhmmer, which scans both strands;
+    amino-acid databases go through hmmsearch. Pass dna_engine="hmmsearch" to
+    force the old single-strand behaviour on DNA databases.
 
     When facet_fallback=False (default), this is a true default-mode run and
     hits go to legacy_hits. When True, this call is the DNA-alphabet branch
@@ -166,14 +231,23 @@ def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
     log.info(f"Loading HMMs from {db_name}")
     t0 = time.time()
     hmms = load_hmms(db_path)
-    from hmm import build_optimized_profiles
-    optimized = build_optimized_profiles(hmms, alphabet=alphabet)
+    use_nhmmer = alphabet == DNA_ALPHABET and dna_engine == "nhmmer"
+    optimized = None
+    if not use_nhmmer:
+        # nhmmer's pipeline builds its own profiles; optimizing here would be
+        # wasted work.
+        from .hmm import build_optimized_profiles
+        optimized = build_optimized_profiles(hmms, alphabet=alphabet)
     t1 = time.time()
-    log.info(f"  Loaded and optimized {len(hmms)} models in {t1 - t0:.1f}s")
+    log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
 
-    log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
     t2 = time.time()
-    hits = legacy_search(hmms, seq_block, optimized=optimized)
+    if use_nhmmer:
+        log.info(f"  nhmmer search: bias filter OFF, both strands, all models")
+        hits = legacy_search_nucl(hmms, seq_block)
+    else:
+        log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
+        hits = legacy_search(hmms, seq_block, optimized=optimized)
     t3 = time.time()
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
@@ -251,9 +325,19 @@ def run_database(db_path, seq_block, seq_fasta, db_name, alphabet, conn,
 def main():
     args = parse_args()
 
+    if args.bath and args.facet:
+        raise SystemExit(
+            "--bath and --facet are incompatible: facet mode is pyhmmer-only. "
+            "Run BATH without --facet.")
+
+    if args.genome and args.facet:
+        raise SystemExit(
+            "--genome and --facet are incompatible: facet mode is element-level. "
+            "Run genome mode without --facet.")
+
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
-    outdir = args.outdir or f"{input_base}.TEBinSorter"
+    outdir = args.outdir or f"{input_base}.TEsorter2"
     prefix = args.prefix or input_base
     os.makedirs(outdir, exist_ok=True)
 
@@ -268,9 +352,10 @@ def main():
     else:
         db_names = [s.strip() for s in args.database.split(",")]
 
+    db_dir = get_db_dir(args.db_dir)
     db_paths = {}
     for name in db_names:
-        db_paths[name] = resolve_db(name)
+        db_paths[name] = resolve_db(name, db_dir=db_dir)
 
     log.info(f"Input: {args.sequence}")
     log.info(f"Databases: {', '.join(db_names)}")
@@ -290,6 +375,19 @@ def main():
             any_nucl = True
         log.info(f"  {name}: {alphabet}, translate={'yes' if alphabet == AMINO_ALPHABET else 'no'}")
 
+    # Genome mode: dispatch to the domain-level genome scanner and stop here.
+    # It windows the genome, finds/classifies each TE protein domain, and emits
+    # a GFF3 + summary -- no element classification, reconcile, or BLAST pass-2.
+    if args.genome:
+        from . import genome
+
+        log.info("Genome mode")
+        genome.run_genome(
+            args.sequence, db_paths, db_alphabets, outdir, prefix,
+            use_bath=args.bath, n_workers=args.processors,
+            win_size=args.win_size, win_ovl=args.win_ovl)
+        return
+
     # Create results database
     conn = create_db(db_path_out)
 
@@ -300,9 +398,12 @@ def main():
     store_sequences(conn, nucl_lengths)
     log.info(f"Input: {len(nucl_lengths)} sequences")
 
-    # Translate if any database needs amino acid sequences
+    # Translate if any database needs amino acid sequences. Under --bath the
+    # amino-acid databases are searched by bathsearch directly against the
+    # nucleotide input (frameshift-aware translated search), so no six-frame
+    # translation is needed for them.
     aa_block = None
-    if any_amino:
+    if any_amino and not args.bath:
         # Remove stale index if present
         for f in [aa_fasta + ".fxi"]:
             if os.path.exists(f):
@@ -342,7 +443,15 @@ def main():
 
         two_pass = args.two_pass or args.pass_1_only or args.emit_bath
 
-        if args.facet and alphabet != DNA_ALPHABET:
+        if args.bath and alphabet == AMINO_ALPHABET:
+            t_b0 = time.time()
+            hits = bath_search.run_and_parse(
+                path, args.sequence, name,
+                n_workers=args.processors, outdir=outdir)
+            store_legacy(conn, hits, name)
+            db_modes[name] = "default"
+            log.info(f"  BATH search: {len(hits)} hits in {time.time() - t_b0:.1f}s")
+        elif args.facet and alphabet != DNA_ALPHABET:
             t_f0 = time.time()
             classifications, f_verified, f_cross, f_legacy = facet_classify_v2(
                 path, seq_block, seq_fasta, alphabet,
@@ -368,10 +477,11 @@ def main():
         elif args.facet and alphabet == DNA_ALPHABET:
             log.info(f"  DNA database: using legacy search (facets AA-only)")
             run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
-                                facet_fallback=True)
+                                facet_fallback=True, dna_engine=args.dna_engine)
             db_modes[name] = "facet"
         else:
-            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet)
+            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
+                                dna_engine=args.dna_engine)
             db_modes[name] = "default"
 
     # Build hits-table indexes now that all HMM hits are written and
@@ -383,7 +493,7 @@ def main():
 
     # --- Classification ---
     log.info("--- Classification ---")
-    from deconflict import load_hits
+    from .deconflict import load_hits
     per_db_results = {}
 
     for name in db_names:
@@ -400,7 +510,8 @@ def main():
 
         log.info(f"  Classifying {name} ({mode} mode, {hits_table})")
         results = classify_sequences(hits, config,
-                                     compat_rounding=args.compat_tesorter_rounding)
+                                     compat_rounding=args.compat_tesorter_rounding,
+                                     compat_voting=args.compat_tesorter_voting)
 
         # Store and export per-database classification (TEsorter format)
         store_classifications(conn, results, database=name, mode=mode)
@@ -440,6 +551,7 @@ def main():
         export_classification_tsv(
             all_results, combined_tsv,
             include_secondary=not args.compat_tesorter_output,
+            include_so=not args.compat_tesorter_output,
         )
         log.info(f"  Combined: {len(all_results)} classified -> {combined_tsv}")
 
