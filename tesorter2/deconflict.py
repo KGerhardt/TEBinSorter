@@ -196,7 +196,7 @@ def export_best_tsv(hits, indices, out_path, nucl_lengths=None):
         out_path: output file path
         nucl_lengths: optional {seq_name: length} for coordinate conversion
     """
-    from sequence import parse_frame_suffix, aa_to_nucl_coords
+    from .sequence import parse_frame_suffix, aa_to_nucl_coords
 
     columns = [
         "seq_id", "model", "family", "strand", "frame",

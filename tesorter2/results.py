@@ -7,7 +7,7 @@ in separate tables. Exports clean tab-separated flat files.
 
 import sqlite3
 
-from sequence import parse_frame_suffix, aa_to_nucl_coords, load_sequences_dict
+from .sequence import parse_frame_suffix, aa_to_nucl_coords, load_sequences_dict
 
 
 _HIT_COLUMNS = """

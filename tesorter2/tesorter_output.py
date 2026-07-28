@@ -15,9 +15,9 @@ import re
 
 import pyfastx
 
-from sequence import (parse_frame_suffix, aa_to_nucl_coords,
+from .sequence import (parse_frame_suffix, aa_to_nucl_coords,
                       load_sequences_dict, open_input, revcomp)
-from classifier import parse_clade_rexdb, parse_clade_gydb
+from .classifier import parse_clade_rexdb, parse_clade_gydb
 
 log = logging.getLogger(__name__)
 

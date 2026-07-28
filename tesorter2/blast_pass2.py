@@ -25,9 +25,9 @@ from collections import defaultdict
 
 import pyfastx
 
-import minimap
-import pass2_external
-from classify_ltr_paf_fast import process_paf, format_row
+from . import minimap
+from . import pass2_external
+from .classify_ltr_paf_fast import process_paf, format_row
 
 log = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
     log.info(f"  minimap2 pass-2: {len(classified_ids)} classified sequences as targets")
 
     if outdir is None:
-        outdir = tempfile.mkdtemp(prefix="tebinsorter_minimap2_")
+        outdir = tempfile.mkdtemp(prefix="tesorter2_minimap2_")
     work = os.path.join(outdir, "minimap2_pass2")
 
     db_fasta, qry_fasta, db_seq_to_dbs = split_classified_unclassified(
@@ -250,7 +250,7 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
         return []
 
     if aligner == "blast":
-        import blast_backend
+        from . import blast_backend
         new_cls = blast_backend.run_pass2_blast(
             qry_fasta=qry_fasta, db_fasta=db_fasta, conn=conn,
             classifications=hmm_classifications,

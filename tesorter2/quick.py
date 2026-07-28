@@ -18,8 +18,8 @@ from collections import defaultdict
 import pyhmmer
 import pyhmmer.easel as easel
 
-from decompose_hmm import build_sub_hmms_from_file, _load_hmms
-from search import (tophits_to_domtbl, parse_domtbl_text, _collect_hits,
+from .decompose_hmm import build_sub_hmms_from_file, _load_hmms
+from .search import (tophits_to_domtbl, parse_domtbl_text, _collect_hits,
                     _partition_hmms_by_size, build_sequence_block)
 
 log = logging.getLogger(__name__)
