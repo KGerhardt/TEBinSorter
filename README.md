@@ -83,9 +83,31 @@ strand it is handed, so it misses every minus-strand copy, and pyHMMER rejects s
 100k residues outright. `nhmmer` scans both strands in one pass and handles long targets.
 
 On 5 Mb of rice against `sine`, nhmmer records hits on both strands (15,992 `+` / 15,821 `-`)
-where hmmsearch records no strand at all, and classifies 48 windows against hmmsearch's 37.
+where hmmsearch records no strand at all, and classifies 50 windows against hmmsearch's 37. The
+35 windows both engines classify are almost all `+` or unstranded; every one of the 15 windows
+only nhmmer recovers is on the minus strand, so the gain is the strand hmmsearch cannot see
+rather than a looser threshold.
 
 `--dna-engine hmmsearch` restores the old single-strand behaviour for comparison.
+
+**Known limitation — hit filters on the DNA path are inherited from the protein path.** DNA hits
+are filtered with the same thresholds as protein domains (coverage ≥ 20%, E-value ≤ 1e-3,
+accuracy ≥ 0.5, normalized score ≥ 0.1). Two consequences on the rice/`sine` fixture:
+
+- **Two of the four filters never discriminate.** Accuracy and coverage reject nothing: the same
+  50 windows are classified whether the cutoffs are at their defaults or at zero. Only E-value
+  and normalized score bind.
+- **The E-value cutoff is not comparable between engines.** nhmmer scores against a long-target
+  search space spanning both strands, hmmsearch against a per-sequence protein-style one, so the
+  same alignment gets very different E-values — for `SHANSINE_MT` on one rice window, 5.5e-05
+  under hmmsearch versus 0.0014 under nhmmer. A single `1e-3` cutoff is therefore stricter for
+  nhmmer than for hmmsearch, and the two windows hmmsearch classifies that nhmmer does not are
+  both boundary misses of this kind, not detection failures — nhmmer finds hundreds of raw hits
+  in each.
+
+The practical effect is bounded: dropping the E-value filter altogether raises the count from 50
+to 59, so no threshold choice recovers much more. SINE-specific filters are not implemented; use
+`--dna-engine hmmsearch` if you need the old behaviour for comparison.
 
 ### Facet mode (`--facet`)
  
