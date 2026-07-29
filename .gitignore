@@ -32,7 +32,12 @@ tmp*/
 _verify/
 _genome_test/
 _full510/
-_regression/
+
+# Regression suite: track the scripts, never the 2.6 GB of venvs, the nested
+# pre-refactor checkout in orig/, the input FASTAs or the regenerated outputs.
+_regression/*
+!_regression/*.sbatch
+!_regression/*.py
 
 # Python build artifacts (sdist/wheel/metadata)
 dist/
