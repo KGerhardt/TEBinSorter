@@ -15,7 +15,7 @@ import pyhmmer.easel as easel
 DNA_ALPHABET = easel.Alphabet.dna()
 AMINO_ALPHABET = easel.Alphabet.amino()
 
-_COMP_TABLE = str.maketrans("ACGT", "TGCA")
+_COMP_TABLE = str.maketrans("ACGTacgt", "TGCAtgca")
 _INVALID_DNA = re.compile(r"[^ACGTN]")
 
 FRAME_SUFFIXES = [
@@ -34,7 +34,7 @@ def clean_seq(seq):
 
 
 def revcomp(seq):
-    """Reverse complement a DNA string."""
+    """Reverse complement a DNA string, preserving soft-masking case."""
     return seq[::-1].translate(_COMP_TABLE)
 
 

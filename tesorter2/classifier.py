@@ -329,6 +329,18 @@ def apply_filters(hits, indices, min_cov=20.0, max_evalue=1e-3,
     return idx[mask]
 
 
+def select_domain_indices(hits, config, compat_rounding=False):
+    """Indices of the domain assignments a classification run actually uses.
+
+    This is steps 1-2 of classify_sequences (hmm2best, then apply_filters).
+    Exposed so the TEsorter-format domain exports can report the same one
+    best model per region that the classification did, rather than every
+    competing model in the raw hit table.
+    """
+    best_idx = hmm2best(hits, config, compat_rounding=compat_rounding)
+    return apply_filters(hits, best_idx, compat_rounding=compat_rounding)
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
