@@ -5,14 +5,25 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=01:00:00
-#SBATCH --output=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/nhmmer_%j.out
-#SBATCH --error=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/nhmmer_%j.err
+#SBATCH --output=logs/nhmmer_%j.out
+#SBATCH --error=logs/nhmmer_%j.err
 set -euo pipefail
 module load python/3.9.5
-DEV=/anvil/projects/x-bio250374/daniel/TESorter2_dev
-REG=$DEV/_regression
-export PATH="/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin:$PATH"
-IN=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/rice_win.fa
+
+# See run_regression.sbatch for why the checkout is resolved this way.
+REG=""
+for _c in "${TESORTER2_DEV:+$TESORTER2_DEV/_regression}" \
+          "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" \
+          "${SLURM_SUBMIT_DIR:-}"; do
+    [[ -n "$_c" && -f "$_c/run_regression.sbatch" ]] && { REG="$_c"; break; }
+done
+[[ -n "$REG" ]] || { echo "cannot locate _regression/; set TESORTER2_DEV" >&2; exit 1; }
+DEV="$(dirname "$REG")"
+mkdir -p "$REG/logs"
+
+export PATH="${TESORTER2_TOOLS:-/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin}:$PATH"
+IN="$REG/rice_win.fa"
+LIB="${TESORTER2_TEST_LIB:-/anvil/projects/x-bio250374/daniel/bath_vs_hmmer/phase3_data/edta_ltr_100.fa}"
 cd "$REG"; rm -rf sine_nh sine_hs
 
 echo "########## SINE db via nhmmer (new default) ##########"
@@ -26,7 +37,7 @@ echo "########## SINE db via hmmsearch (escape hatch) ##########"
 echo
 echo "########## Did the AA path stay untouched? (rexdb) ##########"
 rm -rf rexdb_check
-"$REG/venv/bin/python" -m tesorter2.pipeline /anvil/projects/x-bio250374/daniel/bath_vs_hmmer/phase3_data/edta_ltr_100.fa -d rexdb -p 8 \
+"$REG/venv/bin/python" -m tesorter2.pipeline "$LIB" -d rexdb -p 8 \
     --db-dir "$DEV/tesorter2/database" -o rexdb_check --prefix t >/dev/null 2>&1
 # The baseline predates the SO columns, so compare the original 8 only.
 for f in t.cls.tsv t.rexdb.cls.tsv; do

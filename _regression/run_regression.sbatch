@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=01:00:00
-#SBATCH --output=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/regress_%j.out
-#SBATCH --error=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/regress_%j.err
+#SBATCH --output=logs/regress_%j.out
+#SBATCH --error=logs/regress_%j.err
 
 # Regression check: does the packaged tesorter2 (src/ -> tesorter2/ package,
 # relative imports, renamed CLI) produce byte-identical classifications to the
@@ -15,13 +15,28 @@ set -euo pipefail
 
 module load python/3.9.5
 
-DEV=/anvil/projects/x-bio250374/daniel/TESorter2_dev
-REG=$DEV/_regression
+# Locate the suite rather than hardcoding it: the script's own directory when
+# run directly, and under sbatch -- where the script executes from a spool copy
+# -- SLURM_SUBMIT_DIR, so submit from _regression/. Each candidate is checked
+# for a marker file, because SLURM_SUBMIT_DIR is also set inside interactive
+# salloc/srun shells, where it points at wherever that shell was started rather
+# than at this script. TESORTER2_DEV overrides everything. (The relative
+# --output paths above resolve against the sbatch working directory.)
+REG=""
+for _c in "${TESORTER2_DEV:+$TESORTER2_DEV/_regression}" \
+          "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" \
+          "${SLURM_SUBMIT_DIR:-}"; do
+    [[ -n "$_c" && -f "$_c/run_regression.sbatch" ]] && { REG="$_c"; break; }
+done
+[[ -n "$REG" ]] || { echo "cannot locate _regression/; set TESORTER2_DEV" >&2; exit 1; }
+DEV="$(dirname "$REG")"
 VENV=$REG/venv
-INPUT=/anvil/projects/x-bio250374/daniel/bath_vs_hmmer/phase3_data/edta_ltr_100.fa
+mkdir -p "$REG/logs"
 
-# blastp / makeblastdb for the BLAST pass-2 stage
-export PATH="/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin:$PATH"
+# Toolchain (blastp / makeblastdb for BLAST pass-2) and test inputs live outside
+# the checkout; the defaults are this machine's, override to run elsewhere.
+export PATH="${TESORTER2_TOOLS:-/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin}:$PATH"
+INPUT="${TESORTER2_TEST_LIB:-/anvil/projects/x-bio250374/daniel/bath_vs_hmmer/phase3_data/edta_ltr_100.fa}"
 
 cd "$REG"
 rm -rf old_out new_out

@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=00:30:00
-#SBATCH --output=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/bundled_%j.out
-#SBATCH --error=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/bundled_%j.err
+#SBATCH --output=logs/bundled_%j.out
+#SBATCH --error=logs/bundled_%j.err
 
 # Zero-config check: a clean venv with ONLY the wheel installed (no checkout,
 # no --db-dir, no TESORTER2_DB) must find the packaged databases and reproduce
@@ -14,9 +14,20 @@
 set -euo pipefail
 
 module load python/3.9.5
-REG=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression
-INPUT=/anvil/projects/x-bio250374/daniel/bath_vs_hmmer/phase3_data/edta_ltr_100.fa
-export PATH="/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin:$PATH"
+
+# See run_regression.sbatch for why the checkout is resolved this way. This
+# script deliberately cd's to /tmp, so REG must be resolved before that.
+REG=""
+for _c in "${TESORTER2_DEV:+$TESORTER2_DEV/_regression}" \
+          "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" \
+          "${SLURM_SUBMIT_DIR:-}"; do
+    [[ -n "$_c" && -f "$_c/run_regression.sbatch" ]] && { REG="$_c"; break; }
+done
+[[ -n "$REG" ]] || { echo "cannot locate _regression/; set TESORTER2_DEV" >&2; exit 1; }
+mkdir -p "$REG/logs"
+
+export PATH="${TESORTER2_TOOLS:-/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin}:$PATH"
+INPUT="${TESORTER2_TEST_LIB:-/anvil/projects/x-bio250374/daniel/bath_vs_hmmer/phase3_data/edta_ltr_100.fa}"
 
 unset TESORTER2_DB || true
 cd /tmp                       # deliberately outside the checkout

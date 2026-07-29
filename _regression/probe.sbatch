@@ -5,11 +5,22 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=00:30:00
-#SBATCH --output=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/strand_%j.out
-#SBATCH --error=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/strand_%j.err
+#SBATCH --output=logs/strand_%j.out
+#SBATCH --error=logs/strand_%j.err
 set -euo pipefail
 module load python/3.9.5
-REG=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression
-DB=/anvil/projects/x-bio250374/daniel/TESorter2_dev/tesorter2/database/AnnoSINE_core.hmm
-"$REG/venv/bin/python" "$REG/strand_probe.py" "$DB" \
-    /anvil/projects/x-bio250374/daniel/minirice.fa 100
+
+# See run_regression.sbatch for why the checkout is resolved this way.
+REG=""
+for _c in "${TESORTER2_DEV:+$TESORTER2_DEV/_regression}" \
+          "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" \
+          "${SLURM_SUBMIT_DIR:-}"; do
+    [[ -n "$_c" && -f "$_c/run_regression.sbatch" ]] && { REG="$_c"; break; }
+done
+[[ -n "$REG" ]] || { echo "cannot locate _regression/; set TESORTER2_DEV" >&2; exit 1; }
+DEV="$(dirname "$REG")"
+mkdir -p "$REG/logs"
+
+DB="$DEV/tesorter2/database/AnnoSINE_core.hmm"
+GENOME="${TESORTER2_TEST_GENOME:-/anvil/projects/x-bio250374/daniel/minirice.fa}"
+"$REG/venv/bin/python" "$REG/strand_probe.py" "$DB" "$GENOME" 100

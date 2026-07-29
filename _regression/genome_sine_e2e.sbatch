@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=00:40:00
-#SBATCH --output=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/gsine_%j.out
-#SBATCH --error=/anvil/projects/x-bio250374/daniel/TESorter2_dev/_regression/logs/gsine_%j.err
+#SBATCH --output=logs/gsine_%j.out
+#SBATCH --error=logs/gsine_%j.err
 
 # End-to-end check for genome mode + SINE: genome mode now routes DNA databases
 # (e.g. sine) through nhmmer to find non-coding elements, alongside the protein
@@ -18,12 +18,21 @@
 #   3. rexdb-only: single-kind output stays AA-only (.faa, no .fna), all CDS.
 set -euo pipefail
 module load python/3.9.5
-DEV=/anvil/projects/x-bio250374/daniel/TESorter2_dev
-REG=$DEV/_regression
-export PATH="/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin:$PATH"
+# See run_regression.sbatch for why the checkout is resolved this way.
+REG=""
+for _c in "${TESORTER2_DEV:+$TESORTER2_DEV/_regression}" \
+          "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" \
+          "${SLURM_SUBMIT_DIR:-}"; do
+    [[ -n "$_c" && -f "$_c/run_regression.sbatch" ]] && { REG="$_c"; break; }
+done
+[[ -n "$REG" ]] || { echo "cannot locate _regression/; set TESORTER2_DEV" >&2; exit 1; }
+DEV="$(dirname "$REG")"
+mkdir -p "$REG/logs"
+
+export PATH="${TESORTER2_TOOLS:-/home/x-dmahechalope/.conda/envs/EDTA-RepGen/bin}:$PATH"
 PY="$REG/venv/bin/python"
 DBDIR="$DEV/tesorter2/database"
-GENOME=/anvil/projects/x-bio250374/daniel/minirice.fa
+GENOME="${TESORTER2_TEST_GENOME:-/anvil/projects/x-bio250374/daniel/minirice.fa}"
 
 cd "$REG"; rm -rf gsine_mixed gsine_sine gsine_rexdb
 status=0
