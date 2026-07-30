@@ -1,0 +1,95 @@
+# Cross-database clade/superfamily harmonization for combined classification.
+# KEY = TEsorter2 runtime (order,superfamily,clade) as emitted by
+# classify_sequences; VALUE = harmonized (order,superfamily,clade).
+# Equivalences are asserted from the literature (Neumann et al. 2019, Mob DNA
+# 10:1, Table 1 for the REXdb<->GyDB lineage pairs), not fitted to any dataset.
+# Contains ONLY rows that change something; absent triples are already canonical.
+# lineage_h is the sub-clade level, set only where one database resolves BELOW
+# the level both can express: REXdb splits the Tat group into Ogre/Retand/TatI-III
+# (Ty3_gypsy/non-chromovirus/OTA/Tat/<leaf> in the shipped HMM) while GyDB has a
+# single 'tat'. Both land on clade_h=Tat so the vote is consistent, and the finer
+# REXdb call survives in lineage_h. Tatius is NOT in the group: the HMM puts it at
+# OTA/Tatius, a sibling of Tat, so it keeps its own clade.
+db	order_native	superfamily_native	clade_native	order_h	superfamily_h	clade_h	lineage_h
+gydb	LTR	Caulimoviridae	badnavirus	LTR	Caulimoviridae	Badnavirus	
+gydb	LTR	Caulimoviridae	caulimovirus	LTR	Caulimoviridae	Caulimovirus	
+gydb	LTR	Caulimoviridae	cavemovirus	LTR	Caulimoviridae	Cavemovirus	
+gydb	LTR	Caulimoviridae	soymovirus	LTR	Caulimoviridae	Soymovirus	
+gydb	LTR	Copia	codi_I	LTR	Copia	Codi_I	
+gydb	LTR	Copia	codi_II	LTR	Copia	Codi_Ii	
+gydb	LTR	Copia	codi_c	LTR	Copia	Codi_C	
+gydb	LTR	Copia	codi_d	LTR	Copia	Codi_D	
+gydb	LTR	Copia	copia	LTR	Copia	Copia	
+gydb	LTR	Copia	galea	LTR	Copia	GyDB-Galea	
+gydb	LTR	Copia	hydra	LTR	Copia	Hydra	
+gydb	LTR	Copia	oryco	LTR	Copia	Ivana/Oryco	
+gydb	LTR	Copia	pCretro	LTR	Copia	Pcretro	
+gydb	LTR	Copia	pseudovirus	LTR	Copia	Ty_(Pseudovirus)	
+gydb	LTR	Copia	retrofit	LTR	Copia	Ale/Retrofit	
+gydb	LTR	Copia	sire	LTR	Copia	SIRE	
+gydb	LTR	Copia	tork	LTR	Copia	Tork	
+gydb	LTR	Copia	ty1/copia	LTR	Copia	Ty1/Copia	
+gydb	LTR	Gypsy	412-mdg1	LTR	Gypsy	412/Mdg1	
+gydb	LTR	Gypsy	412_mdg1	LTR	Gypsy	412/Mdg1	
+gydb	LTR	Gypsy	TF	LTR	Gypsy	TF-misc	
+gydb	LTR	Gypsy	a_clade	LTR	Gypsy	A-clade	
+gydb	LTR	Gypsy	athila	LTR	Gypsy	Athila	
+gydb	LTR	Gypsy	b_clade	LTR	Gypsy	B-clade	
+gydb	LTR	Gypsy	cer2-3	LTR	Gypsy	Cer2_3	
+gydb	LTR	Gypsy	cer2_3	LTR	Gypsy	Cer2_3	
+gydb	LTR	Gypsy	crm	LTR	Gypsy	CRM	
+gydb	LTR	Gypsy	csrn1	LTR	Gypsy	Csrn1	
+gydb	LTR	Gypsy	del	LTR	Gypsy	Tekay/Del	
+gydb	LTR	Gypsy	galadriel	LTR	Gypsy	Galadriel	
+gydb	LTR	Gypsy	gmr1	LTR	Gypsy	Gmr1	
+gydb	LTR	Gypsy	gypsy	LTR	Gypsy	Gypsy	
+gydb	LTR	Gypsy	maggy	LTR	Gypsy	Maggy	
+gydb	LTR	Gypsy	micropia_mdg3	LTR	Gypsy	Micropia/Mdg3	
+gydb	LTR	Gypsy	osvaldo	LTR	Gypsy	Osvaldo	
+gydb	LTR	Gypsy	pyggy	LTR	Gypsy	Pyggy	
+gydb	LTR	Gypsy	pyret	LTR	Gypsy	Pyret	
+gydb	LTR	Gypsy	reina	LTR	Gypsy	Reina	
+gydb	LTR	Gypsy	tat	LTR	Gypsy	Tat	
+gydb	LTR	Gypsy	v_clade	LTR	Gypsy	V-clade	
+gydb	LTR	Pao	bel	LTR	Bel-Pao	Bel	
+gydb	LTR	Pao	pao	LTR	Bel-Pao	Pao	
+gydb	LTR	Pao	sinbad	LTR	Bel-Pao	Sinbad	
+gydb	LTR	Pao	suzu	LTR	Bel-Pao	Suzu	
+gydb	LTR	Pao	tas	LTR	Bel-Pao	Tas	
+gydb	LTR	Retroviridae	alpharetroviridae	LTR	Retrovirus	Alpharetroviridae	
+gydb	LTR	Retroviridae	betaretroviridae	LTR	Retrovirus	Betaretroviridae	
+gydb	LTR	Retroviridae	deltaretroviridae	LTR	Retrovirus	Deltaretroviridae	
+gydb	LTR	Retroviridae	epsilonretroviridae	LTR	Retrovirus	Epsilonretroviridae	
+gydb	LTR	Retroviridae	gammaretroviridae	LTR	Retrovirus	Gammaretroviridae	
+gydb	LTR	Retroviridae	lentiviridae	LTR	Retrovirus	Lentiviridae	
+gydb	LTR	Retroviridae	spumaretroviridae	LTR	Retrovirus	Spumaretroviridae	
+gydb	LTR	unknown	B-type_betaretroviridae	LTR	Retrovirus	Betaretroviridae-B	
+gydb	LTR	unknown	D-type_betaretroviridae	LTR	Retrovirus	Betaretroviridae-D	
+gydb	LTR	unknown	VPX_retroviridae	LTR	Retrovirus	Retroviridae-VPX	
+gydb	LTR	unknown	caulimoviridae_dom2	LTR	Caulimoviridae	Caulimoviridae-misc	
+gydb	LTR	unknown	caulimoviruses	LTR	Caulimoviridae	Caulimovirus	
+gydb	LTR	unknown	errantiviridae	LTR	Gypsy	Errantiviridae	
+gydb	LTR	unknown	retroelement	LTR	unknown	Retroelement-generic	
+gydb	LTR	unknown	retropepsins	LTR	unknown	Retropepsins	
+gydb	LTR	unknown	retroviridae	LTR	unknown	Retroviridae	
+gydb	Unknown	unknown	Q_retroviridae	LTR	Retrovirus	Q-retroviridae	
+gydb	Unknown	unknown	all	LTR	Gypsy	All-Gypsy	
+gydb	Unknown	unknown	cog3577	Unknown	unknown	COG3577	
+gydb	Unknown	unknown	cog5550	Unknown	unknown	COG5550	
+gydb	Unknown	unknown	ddi	Unknown	unknown	Ddi	
+gydb	Unknown	unknown	dtg_ilg_template	Unknown	unknown	DTG-ILG-template	
+gydb	Unknown	unknown	nix1	Unknown	unknown	Nix1	
+gydb	Unknown	unknown	pepsins_A1a	Unknown	unknown	Pepsin-A1a	
+gydb	Unknown	unknown	pepsins_A1b	Unknown	unknown	Pepsin-A1b	
+gydb	Unknown	unknown	saspase	Unknown	unknown	Saspase	
+gydb	Unknown	unknown	shadow	Unknown	unknown	Shadow	
+rexdb	LTR	Copia	Ale	LTR	Copia	Ale/Retrofit	
+rexdb	LTR	Copia	Ivana	LTR	Copia	Ivana/Oryco	
+rexdb	LTR	Gypsy	Tekay	LTR	Gypsy	Tekay/Del	
+rexdb	Penelope	unknown	unknown	Penelope	Penelope	unknown	
+rexdb	pararetrovirus	unknown	unknown	LTR	Caulimoviridae	unknown	
+rexdb	LTR	Gypsy	Ogre	LTR	Gypsy	Tat	Ogre
+rexdb	LTR	Gypsy	Retand	LTR	Gypsy	Tat	Retand
+rexdb	LTR	Gypsy	TatI	LTR	Gypsy	Tat	TatI
+rexdb	LTR	Gypsy	TatII	LTR	Gypsy	Tat	TatII
+rexdb	LTR	Gypsy	TatIII	LTR	Gypsy	Tat	TatIII

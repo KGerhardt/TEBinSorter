@@ -4,6 +4,10 @@ __pycache__/
 *.db
 !tesorter2/database/*.similarity_graph.db
 *.tsv
+# ...except the clade harmonization tables: these are source, not data. They
+# ship in the wheel via package-data and drive the multi-database vote.
+!tesorter2/database/clade_harmonization.tsv
+!tesorter2/database/clade_scope.tsv
 *.faa
 *.fasta
 *.fa
