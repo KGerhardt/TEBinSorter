@@ -595,10 +595,13 @@ def main():
     # Export combined classification
     if all_results:
         combined_tsv = os.path.join(outdir, f"{prefix}.cls.tsv")
+        # Lineage rides on the combined file only: the per-database .cls.tsv
+        # stays at TEsorter's exact 7 columns, which is what EDTA consumes.
         export_classification_tsv(
             all_results, combined_tsv,
             include_secondary=not args.compat_tesorter_output,
             include_so=not args.compat_tesorter_output,
+            include_lineage=not args.compat_tesorter_output,
         )
         log.info(f"  Combined: {len(all_results)} classified -> {combined_tsv}")
 

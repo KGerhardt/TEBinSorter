@@ -45,10 +45,16 @@ echo "=== [1/2] OLD code (pre-refactor, flat src/) ==="
 "$VENV/bin/python" "$REG/orig/src/pipeline.py" "$INPUT" \
     -d rexdb -p 8 -o "$REG/old_out" --prefix t
 
-echo "=== [2/2] NEW code (installed package) ==="
+echo "=== [2/2] NEW code (working tree) ==="
 # Bundled DBs live under tesorter2/database/ (packaged), not the old top-level
 # database/ dir.
-"$VENV/bin/tesorter2" "$INPUT" \
+#
+# The venv holds an installed COPY of the package, so $VENV/bin/tesorter2 would
+# test whatever was last pip-installed and report PASS while the working tree
+# went unchecked. Run the checkout through PYTHONPATH instead: same interpreter
+# and dependencies, code under test is the working tree.
+PYTHONPATH="$DEV${PYTHONPATH:+:$PYTHONPATH}" \
+"$VENV/bin/python" -m tesorter2.pipeline "$INPUT" \
     -d rexdb -p 8 --db-dir "$DEV/tesorter2/database" -o "$REG/new_out" --prefix t
 
 echo
