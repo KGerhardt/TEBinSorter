@@ -8,9 +8,10 @@ Pipeline:
   2. `classify_ltr_paf_fast.process_paf` reduces the PAF to one row per query:
         qname  pass/fail  pid  eff_qcov  eff_tcov  best_tname
      under the rule `--min-pid I  --min-qcov C  --min-tcov C` derived from
-     `--pass2-rule I-C-L`. (Per benchmarking, 70-70-70 is the recommended
-     default; the L value is parsed for backwards-compat with the I-C-L
-     grammar but is not consumed downstream.)
+     `--pass2-rule I-C-L`. (Per benchmarking, 70-70-70 is recommended for
+     this minimap2 path; the CLI default is 80-80-80 to mirror upstream's
+     blastn pass-2. The L value is parsed for backwards-compat with the
+     I-C-L grammar but is not consumed downstream.)
   3. Each `pass` row inherits the target's order/superfamily/clade.
 
 The SQLite `blast_hits` table is preserved for post-run introspection but the
@@ -188,18 +189,20 @@ def classify_from_blast(tsv_rows, classifications):
 
 def blast_pass2(input_fasta, conn, hmm_classifications=None,
                 seq_type="nucl", n_processors=4,
-                min_identity=70, min_coverage=70, min_length=70,
+                min_identity=80, min_coverage=80, min_length=80,
                 outdir=None,
                 pass2_classified_fasta=None,
                 preset="asm20", minimap2_extra="",
-                aligner="minimap2", blast_task="megablast"):
-    """minimap2-based pass-2.
+                aligner="blast", blast_task="megablast"):
+    """Pass-2 similarity search (blastn by default, minimap2 opt-in).
 
     Args:
-      min_identity: I from --pass2-rule I-C-L (percent, e.g. 70)
-      min_coverage: C from --pass2-rule I-C-L (percent, applied to qcov AND tcov)
-      min_length:   L from --pass2-rule I-C-L (parsed for backwards-compat
-                    with the I-C-L grammar, not consumed by classify_ltr_paf_fast)
+      min_identity: I from --pass2-rule I-C-L (percent, e.g. 80)
+      min_coverage: C from --pass2-rule I-C-L (percent; blast applies it to
+                    qcovs, minimap2 to qcov AND tcov)
+      min_length:   L from --pass2-rule I-C-L (blast: minimum alignment
+                    length; minimap2: parsed for backwards-compat with the
+                    I-C-L grammar, not consumed by classify_ltr_paf_fast)
     """
     t0 = time.time()
     if aligner == "minimap2":
@@ -212,10 +215,10 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
 
     classified_ids = _get_classified_ids(conn)
     if not classified_ids:
-        log.info("  No classified sequences for minimap2 pass-2")
+        log.info("  No classified sequences for pass-2")
         return []
 
-    log.info(f"  minimap2 pass-2: {len(classified_ids)} classified sequences as targets")
+    log.info(f"  pass-2 ({aligner}): {len(classified_ids)} classified sequences as targets")
 
     if outdir is None:
         outdir = tempfile.mkdtemp(prefix="tesorter2_minimap2_")
@@ -246,7 +249,7 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
         db_fasta = merged_db
 
     if os.path.getsize(db_fasta) == 0:
-        log.info("  pass-2 target FASTA is empty; skipping minimap2")
+        log.info("  pass-2 target FASTA is empty; skipping pass-2")
         return []
 
     if aligner == "blast":

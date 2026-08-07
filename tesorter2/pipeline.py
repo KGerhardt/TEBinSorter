@@ -2,7 +2,8 @@
 Main pipeline for TE classification.
 
 Orchestrates: FASTA ingestion -> alphabet detection -> optional translation
--> HMM search -> classification -> minimap2 pass-2 -> SQLite + TSV output.
+-> HMM search -> classification -> pass-2 similarity search -> SQLite + TSV
+output.
 """
 
 import argparse
@@ -212,7 +213,7 @@ def parse_args():
              "scores in descending order of evidence strength.",
     )
 
-    # minimap2 pass-2 options
+    # pass-2 options
     parser.add_argument(
         "-dp2", "--disable-pass2",
         action="store_true", default=False,
@@ -220,8 +221,10 @@ def parse_args():
     )
     parser.add_argument(
         "-rule", "--pass2-rule",
-        default="70-70-70", type=str, metavar="I-C-L",
-        help="Pass-2 threshold as identity-coverage-length. I drives "
+        default="80-80-80", type=str, metavar="I-C-L",
+        help="Pass-2 threshold as identity-coverage-length. For the blast "
+             "aligner: pident, qcovs, and alignment-length filters (80-80-80 "
+             "matches TEsorter2 master). For minimap2: I drives "
              "classify_ltr_paf_fast --min-pid; C drives BOTH --min-qcov and "
              "--min-tcov; L is parsed for grammar compatibility but is not "
              "consumed by classify_ltr_paf_fast [default: %(default)s]",
@@ -241,11 +244,12 @@ def parse_args():
     )
     parser.add_argument(
         "--pass2-aligner",
-        choices=["minimap2", "blast"], default="minimap2",
-        help="Aligner for the pass-2 similarity search. 'minimap2' (default) "
-             "uses the PAF qcov+tcov path; 'blast' reproduces TEsorter2 "
-             "master's blastn pass-2 (qcovs + alignment-length filter, "
-             "clade=unknown). Both share the same -rule and the "
+        choices=["blast", "minimap2"], default="blast",
+        help="Aligner for the pass-2 similarity search. 'blast' (default) "
+             "reproduces TEsorter2 master's blastn pass-2 (qcovs + "
+             "alignment-length filter, clade=unknown); 'minimap2' uses the "
+             "PAF qcov+tcov path and inherits the best target's full "
+             "classification. Both share the same -rule and the "
              "--pass2-classified-fasta external-pool merge.",
     )
     parser.add_argument(
@@ -622,7 +626,7 @@ def main():
     log.info(f"  Reconciled across {len(per_db_results)} databases: "
              f"{len(reconciled)} sequences")
 
-    # --- minimap2 pass-2 ---
+    # --- pass-2 similarity search ---
     all_results = list(reconciled)
     if (not args.pass_1_only and not args.disable_pass2
             and all_classifications):

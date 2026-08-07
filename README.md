@@ -1,14 +1,17 @@
 # TEsorter2_minimap2
 
-Fork of TEsorter2 with pass-2 similarity search swapped from `blastn` to
-[minimap2](https://github.com/lh3/minimap2). Pass-2 runs minimap2 with a
-sensitivity-tuned flag set, then reduces the PAF to one row per query via
+Fork of TEsorter2 that adds a [minimap2](https://github.com/lh3/minimap2)
+option for the pass-2 similarity search. By default, pass-2 behaves exactly
+like upstream TEsorter2 (`blastn`, 80-80-80 thresholds); opt into minimap2
+with `--pass2-aligner minimap2`. The minimap2 path runs a sensitivity-tuned
+flag set, then reduces the PAF to one row per query via
 `classify_ltr_paf_fast`, which enforces **identity, qcov, and tcov together**
 under the user-supplied I-C-L rule.
 
 ## Additional runtime dependency
 
-`minimap2` binary must be on `$PATH`. Install with conda:
+`minimap2` binary must be on `$PATH` (only needed with
+`--pass2-aligner minimap2`). Install with conda:
 
 ```
 mamba install -c bioconda minimap2
@@ -20,15 +23,18 @@ Everything else is unchanged from TEsorter2 (pyhmmer, pyfastx, numpy).
 
 | Option | Default | Purpose |
 |---|---|---|
-| `-dp2`, `--disable-pass2` | off | Skip the minimap2 pass-2 (HMM-only classification) |
-| `-rule`, `--pass2-rule I-C-L` | `70-70-70` | Pass-2 threshold. I drives `--min-pid`, C drives both `--min-qcov` and `--min-tcov`. L is parsed for grammar compatibility but is not consumed by `classify_ltr_paf_fast` |
+| `--pass2-aligner {blast,minimap2}` | `blast` | Pass-2 engine. `blast` reproduces upstream TEsorter2's blastn pass-2; `minimap2` uses the PAF qcov+tcov path |
+| `--blast-task {megablast,dc-megablast}` | `megablast` | blastn `-task` for the blast engine. `dc-megablast` is slower but more sensitive to diverged matches |
+| `-dp2`, `--disable-pass2` | off | Skip pass-2 (HMM-only classification) |
+| `-rule`, `--pass2-rule I-C-L` | `80-80-80` | Pass-2 threshold. blast: pident, qcovs, and alignment-length filters. minimap2: I drives `--min-pid`, C drives both `--min-qcov` and `--min-tcov`, L is parsed for grammar compatibility but is not consumed by `classify_ltr_paf_fast` |
 | `--pass2-classified-fasta FASTA` | none | Optional FASTA of prior classifications to augment the pass-2 target pool. Headers must be shaped `>id#Order/Superfamily/Clade` |
 | `--minimap2-preset PRESET` | `asm20` | Passed through as `minimap2 -x` |
 | `--minimap2-extra STR` | empty | Additional flags appended to the minimap2 command line |
 
 ## minimap2 invocation
 
-Pass-2 runs (with target = previously-classified pool, query = HMM-unclassified):
+With `--pass2-aligner minimap2`, pass-2 runs (with target =
+previously-classified pool, query = HMM-unclassified):
 
 ```
 minimap2 -x asm20 --rmq=no --no-long-join \

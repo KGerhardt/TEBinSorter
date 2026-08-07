@@ -71,14 +71,21 @@ def parse_args():
                         help="Minimum normalized score [default: 0.1]")
     parser.add_argument("-dp2", "--disable-pass2", action="store_true",
                         default=False,
-                        help="Do not run pass-2 minimap2 classification")
-    parser.add_argument("-rule", "--pass2-rule", type=str, default="70-70-70",
+                        help="Do not run pass-2 classification")
+    parser.add_argument("-rule", "--pass2-rule", type=str, default="80-80-80",
                         metavar="I-C-L",
                         help="Pass-2 threshold identity-coverage-length. "
-                             "I drives classify_ltr_paf_fast --min-pid; C "
-                             "drives both --min-qcov and --min-tcov; L is "
-                             "parsed for grammar compatibility but unused "
-                             "[default: 70-70-70]")
+                             "blast: pident, qcovs, and alignment-length "
+                             "filters. minimap2: I drives "
+                             "classify_ltr_paf_fast --min-pid; C drives both "
+                             "--min-qcov and --min-tcov; L unused "
+                             "[default: 80-80-80]")
+    parser.add_argument("--pass2-aligner", choices=["blast", "minimap2"],
+                        default="blast",
+                        help="Aligner for the pass-2 similarity search. "
+                             "blast (default) reproduces TEsorter2 master's "
+                             "blastn pass-2; minimap2 uses the PAF qcov+tcov "
+                             "path [default: blast]")
     parser.add_argument("--pass2-classified-fasta", type=str, default=None,
                         metavar="FASTA",
                         help="Optional FASTA of previously-classified elements "
@@ -249,7 +256,7 @@ def main():
             export_classification_tsv(results, cls_out)
             log.info(f"Classification: {len(results)} sequences -> {cls_out}")
 
-            # minimap2 pass-2
+            # pass-2 similarity search
             if not args.disable_pass2 and args.seq_type == "nucl":
                 try:
                     p2_id, p2_cov, p2_len = args.pass2_rule.split("-")
@@ -272,6 +279,7 @@ def main():
                     outdir=args.tmp_dir or os.path.dirname(prefix) or ".",
                     pass2_classified_fasta=args.pass2_classified_fasta,
                     minimap2_extra=args.minimap2_extra,
+                    aligner=args.pass2_aligner,
                 )
 
                 if blast_cls:
