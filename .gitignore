@@ -4,6 +4,10 @@ __pycache__/
 *.db
 !tesorter2/database/*.similarity_graph.db
 *.tsv
+# ...except the clade harmonization tables: these are source, not data. They
+# ship in the wheel via package-data and drive the multi-database vote.
+!tesorter2/database/clade_harmonization.tsv
+!tesorter2/database/clade_scope.tsv
 *.faa
 *.fasta
 *.fa
@@ -32,7 +36,12 @@ tmp*/
 _verify/
 _genome_test/
 _full510/
-_regression/
+
+# Regression suite: track the scripts, never the 2.6 GB of venvs, the nested
+# pre-refactor checkout in orig/, the input FASTAs or the regenerated outputs.
+_regression/*
+!_regression/*.sbatch
+!_regression/*.py
 
 # Python build artifacts (sdist/wheel/metadata)
 dist/

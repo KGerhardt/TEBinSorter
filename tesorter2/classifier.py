@@ -16,6 +16,9 @@ import os
 import numpy as np
 from collections import Counter, defaultdict
 
+from .clade_harmonize import (load_harmonization, harmonize, harmonize_lineage,
+                              load_scope, resolves)
+
 log = logging.getLogger(__name__)
 
 
@@ -329,6 +332,18 @@ def apply_filters(hits, indices, min_cov=20.0, max_evalue=1e-3,
     return idx[mask]
 
 
+def select_domain_indices(hits, config, compat_rounding=False):
+    """Indices of the domain assignments a classification run actually uses.
+
+    This is steps 1-2 of classify_sequences (hmm2best, then apply_filters).
+    Exposed so the TEsorter-format domain exports can report the same one
+    best model per region that the classification did, rather than every
+    competing model in the raw hit table.
+    """
+    best_idx = hmm2best(hits, config, compat_rounding=compat_rounding)
+    return apply_filters(hits, best_idx, compat_rounding=compat_rounding)
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
@@ -626,15 +641,17 @@ def store_classifications(conn, results, database=None, mode="default"):
 
 
 def export_classification_tsv(results, out_path, include_secondary=False,
-                              include_so=False):
+                              include_so=False, include_lineage=False):
     """Export classification results as TSV.
 
     Default format matches TEsorter cls.tsv (7 columns). If
     include_secondary=True, appends a SecondaryHits column containing
     per-database classifications and evidence scores in descending order.
     If include_so=True, appends the Sequence Ontology term and accession for
-    the Order/Superfamily call. Both are appended, leaving the positions of
-    the original seven columns untouched.
+    the Order/Superfamily call. If include_lineage=True, appends the sub-clade
+    Lineage ('.' when no database resolved one). All optional columns are
+    appended, leaving the positions of the original seven untouched -- EDTA and
+    friends read this file positionally as (id, order, superfamily).
     """
     columns = ["#TE", "Order", "Superfamily", "Clade", "Complete",
                "Strand", "Domains"]
@@ -642,6 +659,8 @@ def export_classification_tsv(results, out_path, include_secondary=False,
         columns.append("SecondaryHits")
     if include_so:
         columns += ["SO_name", "SO_ID"]
+    if include_lineage:
+        columns.append("Lineage")
     with open(out_path, "w") as f:
         f.write("\t".join(columns) + "\n")
         for r in results:
@@ -660,10 +679,43 @@ def export_classification_tsv(results, out_path, include_secondary=False,
             if include_so:
                 so_name, so_id = so_lookup(r["order"], r["superfamily"])
                 line += [so_name, so_id]
+            if include_lineage:
+                line.append(r.get("lineage") or ".")
             f.write("\t".join(line) + "\n")
 
 
-def reconcile_classifications(per_db_results):
+def _scope_aware_superfamily(pool, weighted_winner, scope):
+    """Pick the winning (harmonized) superfamily with scope-aware deferral.
+
+    Generalizes the paper's two-database superfamily fusion to N databases and
+    reduces to it exactly for two. When the databases disagree on superfamily,
+    a database's claim is deferred to iff (a) no OTHER participating database
+    can resolve that superfamily (it is uncontestable -- only this database can
+    express it), and (b) the claiming database can resolve at least one of the
+    competing superfamilies (it is competent about the alternatives, so its
+    different call is informative). If exactly one superfamily qualifies, it
+    wins; otherwise fall back to the plain summed-score vote (``base``).
+    """
+    sfs = {e[2]["superfamily"] for e in pool}
+    base = weighted_winner(pool, "superfamily")
+    if len(sfs) == 1:
+        return base
+
+    qualifiers = set()
+    for db, _r, h in pool:
+        s = h["superfamily"]
+        others = {e[0] for e in pool if e[0] != db}
+        contestable = any(resolves(od, s, scope) for od in others)
+        if contestable:
+            continue
+        competent = any(resolves(db, cs, scope) for cs in sfs if cs != s)
+        if competent:
+            qualifiers.add(s)
+
+    return qualifiers.pop() if len(qualifiers) == 1 else base
+
+
+def reconcile_classifications(per_db_results, harmonization=None, scope=None):
     """Reconcile per-database classifications via hierarchical weighted vote.
 
     For each sequence classified by multiple databases, vote at each taxonomic
@@ -674,44 +726,108 @@ def reconcile_classifications(per_db_results):
     hierarchical winner. All per-database calls are returned as secondary
     hits sorted by evidence strength.
 
+    REXdb and GyDB use different nomenclatures, so a raw string vote can only
+    pool evidence at Order. When >= 2 databases classify the same element, the
+    vote is therefore run on *harmonized* labels (see clade_harmonize): GyDB's
+    ``Pao``/``athila`` and REXdb's ``Bel-Pao``/``Athila`` collapse onto a shared
+    taxonomy, so the databases genuinely pool wherever they agree, and the
+    primary call is reported with harmonized names.
+
+    The superfamily decision is additionally **scope-aware**: when databases
+    disagree on superfamily, the vote defers to the database whose claimed
+    superfamily the others cannot resolve at lineage level (a catch-all branch),
+    provided that database can resolve the competing superfamilies -- so a
+    database does not win a superfamily it can only catch-all detect against one
+    that genuinely models it (see _scope_aware_superfamily / clade_scope.tsv).
+
+    Elements classified by a single database are left on their native names
+    (strict no-op), so single-db runs are unaffected. The ``secondary`` audit
+    list always keeps native names.
+
     Args:
         per_db_results: dict of {db_name: [result_dict, ...]} where each
             result dict comes from classify_sequences and contains at least
             id, order, superfamily, clade, score.
+        harmonization: optional pre-loaded harmonization table (for testing);
+            defaults to clade_harmonize.load_harmonization().
+        scope: optional pre-loaded scope mask (for testing); defaults to
+            clade_harmonize.load_scope().
 
     Returns:
         list of dicts — one per sequence — with the primary result's fields
         plus 'secondary': list of (db, order, superfamily, clade, score)
-        tuples sorted by score descending across every database that
-        classified this sequence.
+        tuples (native names) sorted by score descending across every database
+        that classified this sequence.
     """
+    if harmonization is None:
+        harmonization = load_harmonization()
+    if scope is None:
+        scope = load_scope()
+
     by_seq = defaultdict(list)
     for db_name, results in per_db_results.items():
         for r in results:
             by_seq[r["id"]].append((db_name, r))
 
     def weighted_winner(entries, level):
+        # entries are (db, native_result, harmonized_labels); vote on the
+        # harmonized label so cross-database calls pool where they agree.
         totals = defaultdict(float)
-        for _, r in entries:
-            totals[r[level]] += r["score"]
+        for _, r, h in entries:
+            totals[h[level]] += r["score"]
         return max(totals.items(), key=lambda kv: kv[1])[0]
 
     reconciled = []
     for seq_id, entries in by_seq.items():
-        pool = entries
-        for level in ("order", "superfamily", "clade"):
-            winner = weighted_winner(pool, level)
-            pool = [e for e in pool if e[1][level] == winner]
+        multi_db = len({db for db, _ in entries}) >= 2
 
-        primary_db, primary_r = max(pool, key=lambda e: e[1]["score"])
+        # Harmonize labels only when >= 2 databases weigh in; otherwise keep
+        # native labels so single-database output is byte-identical to before.
+        annotated = []
+        for db, r in entries:
+            if multi_db:
+                o_h, sf_h, c_h = harmonize(
+                    db, r["order"], r["superfamily"], r["clade"], harmonization)
+                l_h = harmonize_lineage(
+                    db, r["order"], r["superfamily"], r["clade"], harmonization)
+            else:
+                o_h, sf_h, c_h = r["order"], r["superfamily"], r["clade"]
+                l_h = ""
+            annotated.append((db, r, {"order": o_h, "superfamily": sf_h,
+                                      "clade": c_h, "lineage": l_h}))
+
+        pool = annotated
+        for level in ("order", "superfamily", "clade"):
+            if level == "superfamily" and multi_db:
+                winner = _scope_aware_superfamily(pool, weighted_winner, scope)
+            else:
+                winner = weighted_winner(pool, level)
+            pool = [e for e in pool if e[2][level] == winner]
+
+        primary_db, primary_r, primary_h = max(pool, key=lambda e: e[1]["score"])
+
+        # Lineage is deliberately NOT taken from the primary entry. Within the
+        # winning clade only some databases resolve a sub-lineage (REXdb names
+        # Retand where GyDB can only say Tat), so reading it off the highest
+        # scoring entry would silently drop the finer call whenever the coarser
+        # database won on score -- the resolution loss this column exists to
+        # prevent. Vote among the entries that do resolve one instead.
+        resolved = [e for e in pool if e[2]["lineage"]]
+        lineage = weighted_winner(resolved, "lineage") if resolved else ""
 
         secondary = [
             (db, r["order"], r["superfamily"], r["clade"], r["score"])
             for db, r in sorted(entries, key=lambda e: -e[1]["score"])
         ]
 
+        # In multi-db mode report the harmonized consensus labels; the pool
+        # filter guarantees primary_h is the hierarchical winner triple.
         reconciled.append({
             **primary_r,
+            "order": primary_h["order"],
+            "superfamily": primary_h["superfamily"],
+            "clade": primary_h["clade"],
+            "lineage": lineage,
             "primary_db": primary_db,
             "secondary": secondary,
         })

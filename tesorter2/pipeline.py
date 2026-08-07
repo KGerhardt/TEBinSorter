@@ -249,6 +249,28 @@ def parse_args():
              "--pass2-classified-fasta external-pool merge.",
     )
 
+    parser.add_argument(
+        "--no-tesorter-outputs",
+        action="store_true",
+        default=False,
+        help="Skip the TEsorter-compatible companion files (.cls.lib, "
+             ".cls.pep, .dom.gff3, .dom.tsv, .dom.faa), which are written "
+             "alongside each per-database .cls.tsv by default. Writing them "
+             "costs extra I/O and holds the input FASTA in memory.",
+    )
+    parser.add_argument(
+        "-nolib", "--no-library",
+        action="store_true",
+        default=False,
+        help="Do not write the RepeatMasker library (.cls.lib).",
+    )
+    parser.add_argument(
+        "-norc", "--no-reverse",
+        action="store_true",
+        default=False,
+        help="Do not reverse-complement minus-strand sequences when writing "
+             "the .cls.lib library.",
+    )
     return parser.parse_args()
 
 
@@ -558,6 +580,31 @@ def main():
         export_classification_tsv(results, cls_tsv)
         log.info(f"    {len(results)} classified -> {cls_tsv}")
 
+        # TEsorter-compatible companion files, named {prefix}.{db}.* to sit
+        # beside the per-database .cls.tsv. The domain-level files encode
+        # six-frame translated coordinates, so they are only written when this
+        # database was searched on the translated block; --bath and
+        # DNA-alphabet databases get the library alone.
+        if not args.no_tesorter_outputs and results:
+            from .tesorter_output import generate_all_outputs, domain_keys
+            from .classifier import select_domain_indices
+            six_frame = (aa_block is not None
+                         and db_alphabets[name] == AMINO_ALPHABET)
+            keep = domain_keys(hits, select_domain_indices(
+                hits, config, compat_rounding=args.compat_tesorter_rounding))
+            generate_all_outputs(
+                conn, os.path.join(outdir, f"{prefix}.{name}"), name,
+                args.sequence,
+                aa_fasta if six_frame else None,
+                nucl_lengths, results,
+                seq_type="nucl",
+                no_reverse=args.no_reverse,
+                no_library=args.no_library,
+                hits_table=hits_table,
+                domain_files=six_frame,
+                keep=keep,
+            )
+
         per_db_results[name] = results
 
     # Reconcile across databases via hierarchical weighted vote
@@ -607,10 +654,13 @@ def main():
     # Export combined classification
     if all_results:
         combined_tsv = os.path.join(outdir, f"{prefix}.cls.tsv")
+        # Lineage rides on the combined file only: the per-database .cls.tsv
+        # stays at TEsorter's exact 7 columns, which is what EDTA consumes.
         export_classification_tsv(
             all_results, combined_tsv,
             include_secondary=not args.compat_tesorter_output,
             include_so=not args.compat_tesorter_output,
+            include_lineage=not args.compat_tesorter_output,
         )
         log.info(f"  Combined: {len(all_results)} classified -> {combined_tsv}")
 

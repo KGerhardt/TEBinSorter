@@ -161,9 +161,31 @@ strand it is handed, so it misses every minus-strand copy, and pyHMMER rejects s
 100k residues outright. `nhmmer` scans both strands in one pass and handles long targets.
 
 On 5 Mb of rice against `sine`, nhmmer records hits on both strands (15,992 `+` / 15,821 `-`)
-where hmmsearch records no strand at all, and classifies 48 windows against hmmsearch's 37.
+where hmmsearch records no strand at all, and classifies 50 windows against hmmsearch's 37. The
+35 windows both engines classify are almost all `+` or unstranded; every one of the 15 windows
+only nhmmer recovers is on the minus strand, so the gain is the strand hmmsearch cannot see
+rather than a looser threshold.
 
 `--dna-engine hmmsearch` restores the old single-strand behaviour for comparison.
+
+**Known limitation — hit filters on the DNA path are inherited from the protein path.** DNA hits
+are filtered with the same thresholds as protein domains (coverage ≥ 20%, E-value ≤ 1e-3,
+accuracy ≥ 0.5, normalized score ≥ 0.1). Two consequences on the rice/`sine` fixture:
+
+- **Two of the four filters never discriminate.** Accuracy and coverage reject nothing: the same
+  50 windows are classified whether the cutoffs are at their defaults or at zero. Only E-value
+  and normalized score bind.
+- **The E-value cutoff is not comparable between engines.** nhmmer scores against a long-target
+  search space spanning both strands, hmmsearch against a per-sequence protein-style one, so the
+  same alignment gets very different E-values — for `SHANSINE_MT` on one rice window, 5.5e-05
+  under hmmsearch versus 0.0014 under nhmmer. A single `1e-3` cutoff is therefore stricter for
+  nhmmer than for hmmsearch, and the two windows hmmsearch classifies that nhmmer does not are
+  both boundary misses of this kind, not detection failures — nhmmer finds hundreds of raw hits
+  in each.
+
+The practical effect is bounded: dropping the E-value filter altogether raises the count from 50
+to 59, so no threshold choice recovers much more. SINE-specific filters are not implemented; use
+`--dna-engine hmmsearch` if you need the old behaviour for comparison.
 
 ### Facet mode (`--facet`)
  
@@ -228,8 +250,34 @@ stages:
    database, and only entries consistent with the winning label advance. The superfamily level is
    *scope-aware*: a database may only elect a superfamily it models with at least 2 clades.
 Every per-database call is retained in the `SecondaryHits` column as
-`db:order/superfamily/clade=score`, in descending order of evidence. Use `--compat-tesorter-output`
+`db:order/superfamily/clade=score`, in descending order of evidence — always on the database's
+**native** names, so the audit trail survives harmonization. Use `--compat-tesorter-output`
 for the original 7-column format.
+
+> **Compatibility contract.** The per-database `{prefix}.{db}.cls.tsv` is **never harmonized** and
+> always carries exactly TEsorter's original 7 columns. Downstream pipelines — EDTA reads
+> `*.{db}db.cls.tsv` positionally as `(id, Order, Superfamily)` — depend on this, so harmonized
+> names and any added columns belong in the combined `{prefix}.cls.tsv` only. Note that
+> harmonization rewrites `Order` and `Superfamily` too, not just `Clade` (`Pao`→`Bel-Pao`,
+> `pararetrovirus`→`LTR`/`Caulimoviridae`), which is precisely why it must not reach the per-database
+> file. If you ever feed the *combined* file to EDTA, extend the `%lib` hash in its
+> `cleanup_misclas.pl` first — it knows `pararetrovirus` but not `Caulimoviridae` or `Bel-Pao`.
+
+Harmonization is gated on at least two databases voting on an element: a single-database run keeps
+native names throughout, so `-d rexdb` alone is unaffected. The two tables driving stages 2 and 3
+are `tesorter2/database/clade_harmonization.tsv` (mapping) and `clade_scope.tsv` (which superfamily
+each database can resolve at lineage level). The REXdb↔GyDB lineage equivalences — `Ale`/`Retrofit`,
+`Ivana`/`Oryco`, `Tekay`/`Del`, `SIRE`, `Tork`, `Reina`, `CRM`, `Galadriel`, `Athila` — are asserted
+from [Neumann et al. 2019](https://doi.org/10.1186/s13100-018-0144-1) (*Mob DNA* 10:1), not fitted
+to any dataset. Both tables are read from the resolved `--db-dir` first and fall back to the
+packaged copies, so a custom database collection still harmonizes.
+
+Where one database resolves *below* the level both can express, the combined file adds a `Lineage`
+column rather than forking the clade name. REXdb splits the Tat group into `Ogre`/`Retand`/`TatI-III`
+while GyDB has a single `tat`: both are reported as `Clade=Tat`, and REXdb's finer call lands in
+`Lineage`. Lineage is chosen among the databases that actually resolve one, so the finer call
+survives even when the coarser database wins the score vote. (`Tatius` is not part of the group —
+the REXdb HMM places it at `OTA/Tatius`, a sibling of `Tat`.)
  
 ### Sequence Ontology
 

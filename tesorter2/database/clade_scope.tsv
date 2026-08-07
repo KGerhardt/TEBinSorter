@@ -1,0 +1,17 @@
+# A-priori scope / resolving-power mask per (database, harmonized superfamily).
+# resolving = database models >= 2 distinct clades in that superfamily (can adjudicate at lineage level);
+# otherwise it is a catch-all / absent branch. Counted from the shipped HMM databases.
+db	superfamily_h	n_clades	resolving
+gydb	Gypsy	22	yes
+gydb	Copia	15	yes
+gydb	Other	14	yes
+gydb	Retrovirus	11	yes
+gydb	Caulimoviridae	5	yes
+gydb	Bel-Pao	5	yes
+rexdb	Copia	21	yes
+rexdb	Gypsy	20	yes
+rexdb	Other	2	yes
+rexdb	Penelope	1	no
+rexdb	Retrovirus	1	no
+rexdb	Bel-Pao	1	no
+rexdb	Caulimoviridae	1	no
