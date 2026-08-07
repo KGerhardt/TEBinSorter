@@ -248,6 +248,15 @@ def parse_args():
              "clade=unknown). Both share the same -rule and the "
              "--pass2-classified-fasta external-pool merge.",
     )
+    parser.add_argument(
+        "--blast-task",
+        choices=["megablast", "dc-megablast"], default="megablast",
+        help="blastn -task for the 'blast' pass-2 aligner. megablast "
+             "(default) is fastest and tuned for near-identical matches; "
+             "dc-megablast uses discontiguous seeds — slower but more "
+             "sensitive to diverged/cross-species matches. Ignored when "
+             "--pass2-aligner=minimap2 [default: %(default)s]",
+    )
 
     parser.add_argument(
         "--no-tesorter-outputs",
@@ -643,6 +652,7 @@ def main():
             pass2_classified_fasta=args.pass2_classified_fasta,
             minimap2_extra=args.minimap2_extra,
             aligner=args.pass2_aligner,
+            blast_task=args.blast_task,
         )
 
         if blast_cls:

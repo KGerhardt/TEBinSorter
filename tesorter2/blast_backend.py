@@ -9,8 +9,9 @@ so the external-pool augmentation (`--pass2-classified-fasta`) applies to both
 aligner backends. Only the alignment + parse + classify is master-specific here.
 
 master functions (make_blast_db, run_blast_chunk, parse_blast_output,
-store_blast_hits, classify_from_blast) are copied unchanged from
-origin/master:src/blast_pass2.py. chunk_fasta + run_pass2_blast are new.
+store_blast_hits, classify_from_blast) are copied from
+origin/master:src/blast_pass2.py; run_blast_chunk additionally takes a
+blast_task parameter (--blast-task). chunk_fasta + run_pass2_blast are new.
 """
 
 import logging
@@ -37,15 +38,15 @@ def make_blast_db(db_fasta, seq_type="nucl"):
     log.info(f"  BLAST database built: {db_fasta}")
 
 
-def run_blast_chunk(query_chunk, db_fasta, output, seq_type="nucl", ncpu=1):
+def run_blast_chunk(query_chunk, db_fasta, output, seq_type="nucl", ncpu=1,
+                    blast_task="megablast"):
     """Run BLAST on one query chunk."""
     app = "blastn" if seq_type == "nucl" else "blastp"
     outfmt = ("6 qseqid sseqid pident length mismatch gapopen qstart qend "
               "sstart send evalue bitscore qlen slen qcovs qcovhsp sstrand")
-    # dc-megablast (discontiguous megablast) is more sensitive than the blastn
-    # default (megablast) for divergent/cross-species TE matches. The -task value
-    # is blastn-only; blastp would reject it, so gate it on the blastn branch.
-    task = " -task dc-megablast" if app == "blastn" else ""
+    # The -task value is blastn-only; blastp would reject it, so gate it on
+    # the blastn branch.
+    task = f" -task {blast_task}" if app == "blastn" else ""
     cmd = (f"{app}{task} -query {query_chunk} -db {db_fasta} -out {output} "
            f"-outfmt '{outfmt}' -num_threads {ncpu}")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -205,7 +206,8 @@ def chunk_fasta(qry_fasta, n_chunks, outdir):
 
 
 def run_pass2_blast(qry_fasta, db_fasta, conn, classifications, db_seq_to_dbs,
-                    n_processors, min_identity, min_coverage, min_length, work):
+                    n_processors, min_identity, min_coverage, min_length, work,
+                    blast_task="megablast"):
     """blastn pass-2 over an already-prepared (db_fasta, qry_fasta) pair.
 
     Reproduces TEsorter2 master's: makeblastdb -> chunked parallel blastn ->
@@ -233,7 +235,7 @@ def run_pass2_blast(qry_fasta, db_fasta, conn, classifications, db_seq_to_dbs,
     for chunk in query_chunks:
         out = chunk + ".blastout"
         blast_outputs.append(out)
-        args_list.append((chunk, db_fasta, out, "nucl", 1))
+        args_list.append((chunk, db_fasta, out, "nucl", 1, blast_task))
     with multiprocessing.Pool(len(query_chunks)) as pool:
         pool.starmap(run_blast_chunk, args_list)
     t2 = time.time()

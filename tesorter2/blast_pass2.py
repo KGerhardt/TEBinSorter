@@ -192,7 +192,7 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
                 outdir=None,
                 pass2_classified_fasta=None,
                 preset="asm20", minimap2_extra="",
-                aligner="minimap2"):
+                aligner="minimap2", blast_task="megablast"):
     """minimap2-based pass-2.
 
     Args:
@@ -260,6 +260,7 @@ def blast_pass2(input_fasta, conn, hmm_classifications=None,
             min_coverage=min_coverage,
             min_length=min_length,
             work=work,
+            blast_task=blast_task,
         )
         log.info(f"  blast pass-2 total: {time.time() - t0:.1f}s")
         return new_cls
