@@ -51,24 +51,42 @@ only the first is fixed here:
      Verified: with -Z pinned, common hits keep identical E-values across
      subsets; without it, none do.
 
-  2. BATH can return a *different alignment* for the same sequence and model
-     depending on which sequences accompany it. Observed on the TIR database:
-     one sequence scored 19.7 (hmm 44-148) alone and in one 45-sequence subset,
-     but 13.6 (hmm 123-148) in the full 60-sequence file -- enough to cross the
-     classification threshold. BATH itself is deterministic (identical output
-     across repeat runs and across --cpu 1 vs 8), and head-subsets of 45/30/15
-     reproduce the full run's scores exactly, so this is not subsetting as such
-     but grouping: it is consistent with BATH's ~0.25 Mb block streaming
-     truncating an alignment at a block boundary.
+  2. BATH truncates an alignment depending on how much sequence precedes the
+     target in the input file. NOT fixed here -- it is a bathsearch bug.
 
-The cascade does not cause (2), but it does expose it, because different stage
-orders hand BATH differently-grouped inputs. The practical consequences: a
-cascade's output can differ slightly by stage order beyond the intended
-sensitivity difference, and any engine-comparison analysis must hold the input
-file identical rather than compare a full run against a subset run. If that
-proves material, the fix is to run BATH once over the full input and apply the
-cascade filter to its results afterwards -- correct, but it forfeits the
-work-reduction that is the point of staging.
+     Minimal case, TIR database, model Ginger-TPase (M=153), one 4477 nt
+     target. With <= 20,267 nt of other sequence ahead of it in the file BATH
+     reports hmm 44-148, score 19.7. With 25,562 nt ahead it reports hmm
+     123-148, score 13.6 -- the same alignment, truncated by 79 model
+     positions. Normalized: 0.129 vs 0.089, straddling the classifier's
+     min_norm_score of 0.1, so the sequence is classified in one case and not
+     the other.
+
+     It is the heuristic filter stage, not the DP: --max (all heuristics off)
+     recovers the full alignment at every offset tested. --block_length, purely
+     a threading/IO knob, flips it too (50000 recovers 19.7 on the same file
+     the 262144 default truncates). BATH is otherwise deterministic -- byte
+     identical output across repeat runs and across --cpu 1 vs 8 -- so this is
+     reproducible, not a race. The alignment never crosses a sequence boundary;
+     coordinates stay inside the target. What moves is how much of the model
+     the filter lets through.
+
+     Ruled out: a running RNG accumulator tiebreaking between two alignment
+     paths. --seed changes nothing (13.6 across seeds 1, 2, 3, 7, 42, 99 and
+     12345 on the same input), so the behaviour is seed-independent as well as
+     thread-independent. The remaining candidate is long-target windowing --
+     window placement derived from a running offset within the block, so a
+     boundary landing inside the domain surfaces only part of it -- but that is
+     unconfirmed and belongs upstream rather than here.
+
+The cascade does not cause (2), but it does expose it: different stage orders
+hand BATH inputs packed differently, so a cascade's output can differ by stage
+order beyond the intended sensitivity difference. Any engine-comparison
+analysis must therefore hold the BATH input file byte-identical -- a full run
+and a subset run are not comparable for BATH, whatever Z is pinned to. If it
+proves material in production the workaround is to run BATH once over the full
+input and apply the cascade filter to its results afterwards, which is correct
+but forfeits the work reduction that staging exists for.
 """
 
 import logging
