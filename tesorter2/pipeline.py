@@ -74,15 +74,18 @@ def parse_args():
     )
     parser.add_argument(
         "-d", "--database",
-        default="rexdb",
+        default=None,
         help="Comma-separated list of database names or paths "
-             f"(aliases: {', '.join(DB_ALIASES.keys())}) [default: rexdb]",
+             f"(aliases: {', '.join(DB_ALIASES.keys())}). "
+             "[default: every bundled database except sine-so]",
     )
     parser.add_argument(
         "--max-search",
         action="store_true",
         default=False,
-        help="Search against all known databases",
+        help="Search against all known databases. This is now the default "
+             "when -d is omitted; the flag is kept so it still forces the "
+             "full set even alongside an explicit -d.",
     )
     parser.add_argument(
         "--genome",
@@ -367,8 +370,10 @@ def main():
     db_path_out = os.path.join(outdir, f"{prefix}.db")
     aa_fasta = os.path.join(outdir, f"{prefix}.aa")
 
-    # Resolve databases
-    if args.max_search:
+    # Resolve databases. Omitting -d searches everything: each database
+    # classifies independently and reconciliation resolves them afterwards, so
+    # more databases is more evidence rather than more ambiguity.
+    if args.max_search or not args.database:
         db_names = [k for k in DB_ALIASES.keys() if k != "sine-so"]
         if args.include_sine_so:
             db_names.append("sine-so")

@@ -184,8 +184,12 @@ Requires at least one database; incompatible with `--facet`.
  
 ### Multiple databases
  
-TEsorter2 accepts several databases in one run (`-d rexdb,gydb`) and reconciles them in three
-stages:
+**Every bundled database is searched by default.** Omitting `-d` searches rexdb, gydb, line, tir
+and sine together; pass `-d rexdb,gydb` to restrict the set. Each database classifies
+independently and reconciliation resolves them afterwards, so more databases means more evidence
+rather than more ambiguity — at proportionally more compute.
+
+The three reconciliation stages:
  
 1. **Independent classification**: each database classifies every element on its own, emitting a
    per-database `{prefix}.{db}.cls.tsv` in native TEsorter format.
@@ -277,8 +281,8 @@ tesorter2 <sequence> [options]
 | Flag | Default | Description |
 |---|---|---|
 | `sequence` | — | Input FASTA (TE library, or genome with `--genome`) |
-| `-d`, `--database` | `rexdb` | Comma-separated database aliases or paths |
-| `--max-search` | off | Search against all bundled databases |
+| `-d`, `--database` | all bundled | Comma-separated database aliases or paths |
+| `--max-search` | off | Force the full database set even alongside an explicit `-d` |
 | `-o`, `--outdir` | `{input}.TEsorter2` | Output directory |
 | `--db-dir` | bundled | Directory holding the HMM databases (see Installation) |
 | `--dna-engine` | `nhmmer` | Engine for DNA databases (`nhmmer` or `hmmsearch`) |
