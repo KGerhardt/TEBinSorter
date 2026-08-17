@@ -14,15 +14,16 @@ Unlike element mode (classifier.classify_sequences), genome mode:
   * runs NO BLAST pass-2,
   * emits NO per-element .cls.tsv.
 
-Protein-domain engines, selected by --bath:
-  * HMMER (default): six-frame translate each window (sequence.translate_fasta),
-    legacy_search, then map amino-acid envelope coords -> nucleotide coords via
-    sequence.parse_frame_suffix + sequence.aa_to_nucl_coords.
-  * BATH (--bath): bathsearch --fs directly on the nucleotide windows; the
-    tblout already yields nucleotide ali coords + strand per domain occurrence
-    (ascending-normalized, |fwd1/|rev1 suffix), so no translation / frame math.
+Protein-domain search is BATH-only. bathsearch --fs runs directly on the
+nucleotide windows and its tblout already yields nucleotide ali coords + strand
+per domain occurrence (ascending-normalized, |fwd1/|rev1 suffix), so there is no
+six-frame translation and no frame math. BATH's frameshift-aware alignment
+recovers a domain broken by an indel as one hit with its true extent, which is
+why genome mode uses it exclusively; --bath is implied here and has no effect.
+BATH is consequently a hard requirement for genome mode -- see bath_search.
+require_binaries, called before any windowing so a missing binary fails fast.
 
-DNA-alphabet databases (e.g. AnnoSINE) are searched with a third engine:
+DNA-alphabet databases (e.g. AnnoSINE) are searched with a second engine:
   * nhmmer: DNA-DNA search directly on the nucleotide windows, both strands in
     one pass (search.legacy_search_nucl). SINEs are non-coding / non-autonomous,
     so they carry no protein domain and are invisible to the two engines above.
@@ -39,10 +40,10 @@ import re
 import sys
 import time
 
-from .hmm import load_hmms, build_optimized_profiles, AMINO_ALPHABET, DNA_ALPHABET
-from .sequence import (open_input, clean_seq, revcomp, translate_fasta,
-                      parse_frame_suffix, aa_to_nucl_coords, load_sequences_dict)
-from .search import build_sequence_block, legacy_search, legacy_search_nucl
+from .hmm import load_hmms, AMINO_ALPHABET, DNA_ALPHABET
+from .sequence import (open_input, clean_seq, revcomp,
+                      parse_frame_suffix, load_sequences_dict)
+from .search import build_sequence_block, legacy_search_nucl
 from .so_map import so_gff_type
 from .classifier import (parse_clade_rexdb, parse_clade_gydb, classify_element,
                         load_gydb_clade_map, DB_CONFIGS)
@@ -60,16 +61,6 @@ MIN_COV = 20.0
 MAX_EVALUE = 1e-3
 MIN_ACC = 0.5
 MIN_NORM_SCORE = 0.1
-
-# pyhmmer's search pipeline rejects single sequences longer than 100k residues.
-# TEsorter avoids this by calling the hmmscan binary; our HMMER engine uses
-# pyhmmer, so we cap each window so its translated frame stays under the limit.
-# The cap is invisible to results: the retained overlap (>= any TE ORF) means
-# every domain is still fully contained in at least one window. BATH has no such
-# limit (it searches nucleotides directly) and keeps the user's window size.
-_PYHMMER_MAX_AA = 100000
-_HMMER_MAX_WIN_NUCL = 240000   # ~80k AA per frame, comfortably under the limit
-_HMMER_MAX_WIN_OVL = 60000     # >> longest TE protein domain
 
 # Window IDs are "{chrom}:{start}-{end}" with a 1-based start (see cut_genome).
 # rsplit on the LAST ':' so chromosome names containing ':' survive.
@@ -225,9 +216,9 @@ def _parse_model(model, config):
 # Per-hit -> genomic feature
 # ---------------------------------------------------------------------------
 
-def _hit_to_feature(h, engine, config, win_lengths):
+def _hit_to_feature(h, engine, config):
     """Turn one passing domain hit into a GFF feature tuple, classified on its
-    own. Returns (feature_tuple, aa_or_nucl_domain_seq_key) or None.
+    own. Returns (feature_tuple, classification_string) or None.
 
     Feature tuple layout (indices used by resolve_overlaps): 0 chrom, 1 source,
     2 type, 3 start, 4 end, 5 score, 6 strand, 7 frame, 8 attributes,
@@ -252,34 +243,22 @@ def _hit_to_feature(h, engine, config, win_lengths):
 
     gene, clade = _parse_model(model, config)
 
-    if engine in ("bath", "nhmmer"):
-        # Both yield ascending nucleotide ali coords + strand via the |fwd1/|rev1
-        # suffix (BATH from its tblout, nhmmer from search._normalize_nucl_hit),
-        # so the coordinate handling is identical. They differ only in what was
-        # searched, which fixes the sequence source and coordinate frame:
-        #   bath   -> the windowed cut.fa (coords are within-window; _split_
-        #             window_id maps the window offset to genomic space below),
-        #   nhmmer -> the RAW input genome directly (nhmmer handles long targets,
-        #             so it is not windowed; target is the whole chromosome and
-        #             the coords are already genomic). Running nhmmer off the raw
-        #             input -- not cut.fa -- keeps the DNA-element annotation
-        #             independent of the protein path's window sizing (the HMMER
-        #             window cap would otherwise change what nhmmer sees).
-        window_id, strand, _frame = parse_frame_suffix(h["target_name"])
-        w_start, w_end = h["ali_from"], h["ali_to"]   # nucleotide, ascending
-        frame_str = "."
-        extract = (window_id, w_start, w_end, strand,
-                   "win" if engine == "bath" else "raw")
-    else:  # hmmer: AA envelope -> within-window nucleotide coords
-        window_id, strand, frame = parse_frame_suffix(h["target_name"])
-        wlen = win_lengths.get(window_id)
-        if wlen is None:
-            return None
-        w_start, w_end = aa_to_nucl_coords(
-            h["env_from"], h["env_to"], strand, frame, wlen)
-        frame_str = str(frame)
-        # Domain sequence is the AA slice of the translated frame.
-        extract = (h["target_name"], h["env_from"], h["env_to"], "+", "aa")
+    # Both engines yield ascending nucleotide ali coords + strand via the
+    # |fwd1/|rev1 suffix (BATH from its tblout, nhmmer from
+    # search._normalize_nucl_hit), so the coordinate handling is identical.
+    # They differ only in what was searched, which fixes the sequence source:
+    #   bath   -> the windowed cut.fa (coords are within-window; _split_window_id
+    #             maps the window offset to genomic space below),
+    #   nhmmer -> the RAW input genome directly (nhmmer handles long targets, so
+    #             it is not windowed; the target is the whole chromosome and the
+    #             coords are already genomic). Running nhmmer off the raw input
+    #             rather than cut.fa keeps the DNA-element annotation
+    #             independent of the protein path's window sizing.
+    window_id, strand, _frame = parse_frame_suffix(h["target_name"])
+    w_start, w_end = h["ali_from"], h["ali_to"]   # nucleotide, ascending
+    frame_str = "."
+    extract = (window_id, w_start, w_end, strand,
+               "win" if engine == "bath" else "raw")
 
     chrom, offset, _ = _split_window_id(window_id)
     if offset is not None:
@@ -297,8 +276,8 @@ def _hit_to_feature(h, engine, config, win_lengths):
     gid = "{}:{}-{}|{}".format(chrom, g_start, g_end, model)
     name = "{}-{}".format(clade, gene)
     so_name, so_id = so_gff_type(order, superfamily)
-    # GFF type depends on what the hit represents. For the protein engines the
-    # feature is a protein domain, not the element, so its type stays CDS:
+    # GFF type depends on what the hit represents. For BATH the feature is a
+    # protein domain, not the element, so its type stays CDS:
     # typing it as the element's SO term would assert the domain *is* the
     # retrotransposon. The element's ontology term goes in Ontology_term instead.
     # An nhmmer hit, by contrast, IS the element (a SINE has no protein domain),
@@ -320,21 +299,15 @@ def _hit_to_feature(h, engine, config, win_lengths):
 # Output
 # ---------------------------------------------------------------------------
 
-# Extraction source (last element of feature[10]) -> (FASTA it reads from,
-# output alphabet). "aa" = HMMER's translated frames (amino acids), "win" = BATH's
-# nucleotide windows (cut.fa), "raw" = nhmmer's un-windowed input genome.
-_SRC_ALPHA = {"aa": "faa", "win": "fna", "raw": "fna"}
-
-
 def _feature_src(feature):
-    """Extraction source tag ('aa' | 'win' | 'raw') — last element of the
-    extraction tuple."""
+    """Extraction source tag — last element of the extraction tuple. "win" =
+    BATH's nucleotide windows (cut.fa), "raw" = nhmmer's un-windowed input
+    genome."""
     return feature[10][4]
 
 
 def _extract_domain_seq(feature, seq_cache):
-    """Sub-sequence for one feature: amino acids for HMMER (AA slice of the
-    translated frame), nucleotides for BATH/nhmmer (revcomp on minus). The
+    """Nucleotide sub-sequence for one feature (revcomp on minus). The
     extraction tuple is (key, start, end, strand, src) with key into seq_cache
     and 1-based start/end in that sequence's own coordinate system."""
     key, start, end, strand, _src = feature[10]
@@ -345,44 +318,34 @@ def _extract_domain_seq(feature, seq_cache):
     return sub
 
 
-def write_outputs(features, outdir, prefix, aa_fa, cut_fa, input_fasta):
-    """Write {prefix}.dom.gff3, the sub-sequence FASTA(s), and the summary table.
+def write_outputs(features, outdir, prefix, cut_fa, input_fasta):
+    """Write {prefix}.dom.gff3, {prefix}.dom.fna, and the summary table.
 
-    Protein-domain features (HMMER) emit amino acids to {prefix}.dom.faa; element
-    features (BATH/nhmmer) emit nucleotides to {prefix}.dom.fna. A run producing
-    both writes both files; a single-alphabet run writes just the one. Each
-    feature is read back from the FASTA it was searched against: HMMER frames
-    from aa_fa, BATH windows from cut_fa, nhmmer elements from the input genome.
+    Every feature is nucleotide: BATH reports nucleotide coordinates against the
+    windows and nhmmer against the raw input, so both sub-sequence sources are
+    nucleotide FASTAs and share one output file. Each feature is read back from
+    the FASTA it was searched against -- BATH windows from cut_fa, nhmmer
+    elements from the input genome.
 
-    Returns (gff_path, [seq_paths], summary_path)."""
+    Returns (gff_path, [seq_path], summary_path)."""
     gff_path = os.path.join(outdir, "{}.dom.gff3".format(prefix))
     summary_path = os.path.join(outdir, "{}.genome.summary.tsv".format(prefix))
+    seq_path = os.path.join(outdir, "{}.dom.fna".format(prefix))
 
-    src_fasta = {"aa": aa_fa, "win": cut_fa, "raw": input_fasta}
-    srcs = {_feature_src(f) for f in features}
+    src_fasta = {"win": cut_fa, "raw": input_fasta}
     # Load only the source caches actually needed.
-    caches = {s: load_sequences_dict(src_fasta[s]) for s in srcs}
+    caches = {s: load_sequences_dict(src_fasta[s])
+              for s in {_feature_src(f) for f in features}}
 
-    # One output handle per alphabet (.faa / .fna), opened only if present.
-    alphas = {_SRC_ALPHA[s] for s in srcs}
-    seq_paths = {a: os.path.join(outdir, "{}.dom.{}".format(prefix, a))
-                 for a in alphas}
-    handles = {a: open(p, "w") for a, p in seq_paths.items()}
-    try:
-        with open(gff_path, "w") as fg:
-            fg.write("##gff-version 3\n")
-            for feat in features:
-                fg.write("\t".join(map(str, feat[:9])) + "\n")
-                src = _feature_src(feat)
-                sub = _extract_domain_seq(feat, caches[src])
-                handles[_SRC_ALPHA[src]].write(">{} {}\n{}\n".format(
-                    feat[9], feat[8], sub))
-    finally:
-        for h in handles.values():
-            h.close()
+    with open(gff_path, "w") as fg, open(seq_path, "w") as fs:
+        fg.write("##gff-version 3\n")
+        for feat in features:
+            fg.write("\t".join(map(str, feat[:9])) + "\n")
+            sub = _extract_domain_seq(feat, caches[_feature_src(feat)])
+            fs.write(">{} {}\n{}\n".format(feat[9], feat[8], sub))
 
     summarize(features, summary_path)
-    return gff_path, list(seq_paths.values()), summary_path
+    return gff_path, [seq_path], summary_path
 
 
 def summarize(features, summary_path):
@@ -437,45 +400,26 @@ def summarize(features, summary_path):
 # Engine dispatch
 # ---------------------------------------------------------------------------
 
-def _search_hmmer(cut_fa, aa_fa, db_path, n_workers):
-    """Six-frame translate windows and exhaustively search. Returns
-    (hits, win_lengths, aa_fa) — win_lengths maps window_id -> nucl length."""
-    log.info("  Six-frame translating windows")
-    if os.path.exists(aa_fa + ".fxi"):
-        os.remove(aa_fa + ".fxi")
-    win_lengths = translate_fasta(cut_fa, aa_fa)
-    hmms = load_hmms(db_path)
-    optimized = build_optimized_profiles(hmms, alphabet=AMINO_ALPHABET)
-    aa_block = build_sequence_block(aa_fa, AMINO_ALPHABET)
-    log.info("  Searching {} models over {} frames".format(
-        len(hmms), len(aa_block)))
-    hits = legacy_search(hmms, aa_block, optimized=optimized)
-    log.info("  {} raw domain hits".format(len(hits)))
-    return hits, win_lengths
-
-
 def _search_bath(cut_fa, db_path, db_name, n_workers, outdir):
-    """bathsearch --fs directly on the nucleotide windows. win_lengths is
-    unused (BATH tblout coords are already nucleotide)."""
-    hits = bath_search.run_and_parse(
+    """bathsearch --fs directly on the nucleotide windows."""
+    return bath_search.run_and_parse(
         db_path, cut_fa, db_name, n_workers=n_workers, outdir=outdir)
-    return hits, {}
 
 
 def _search_nhmmer(db_path, nucl_block):
     """DNA-DNA search of a nucleotide model set against the RAW input genome,
     both strands in one pass (search.legacy_search_nucl). nhmmer handles long
     targets, so the input is searched un-windowed: the target is the whole
-    chromosome and hits carry genomic ali coords + a |fwd1/|rev1 strand suffix
-    (win_lengths is unused). The caller builds nucl_block from the input once and
-    shares it across DNA dbs. Searching the raw input rather than cut.fa keeps
-    the DNA-element annotation independent of the protein path's window sizing."""
+    chromosome and hits carry genomic ali coords + a |fwd1/|rev1 strand suffix.
+    The caller builds nucl_block from the input once and shares it across DNA
+    dbs. Searching the raw input rather than cut.fa keeps the DNA-element
+    annotation independent of the protein path's window sizing."""
     hmms = load_hmms(db_path)
     log.info("  Searching {} DNA models (nhmmer, both strands, raw input)".format(
         len(hmms)))
     hits = legacy_search_nucl(hmms, nucl_block)
     log.info("  {} raw nucleotide hits".format(len(hits)))
-    return hits, {}
+    return hits
 
 
 # ---------------------------------------------------------------------------
@@ -483,16 +427,14 @@ def _search_nhmmer(db_path, nucl_block):
 # ---------------------------------------------------------------------------
 
 def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
-               use_bath=False, n_workers=4,
-               win_size=int(1e6), win_ovl=int(1e5)):
+               n_workers=4, win_size=int(1e6), win_ovl=int(1e5)):
     """Run genome mode end-to-end. db_paths/db_alphabets keyed by db name.
 
-    Amino-acid databases find TE protein domains (HMMER, or BATH under --bath).
-    DNA-alphabet databases (e.g. sine) find non-coding elements directly with
-    nhmmer. A single run may mix both; every engine maps back to the same
-    genomic feature space and the outputs are merged."""
+    Amino-acid databases find TE protein domains with BATH; DNA-alphabet
+    databases (e.g. sine) find non-coding elements directly with nhmmer. A
+    single run may mix both; both engines map back to the same genomic feature
+    space and the outputs are merged."""
     t_start = time.time()
-    aa_engine = "bath" if use_bath else "hmmer"
 
     aa_dbs = [n for n, a in db_alphabets.items() if a == AMINO_ALPHABET]
     nucl_dbs = [n for n, a in db_alphabets.items() if a == DNA_ALPHABET]
@@ -501,34 +443,30 @@ def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
             "Genome mode needs at least one searchable database (amino-acid for "
             "TE protein domains, or DNA for non-coding elements like sine).")
 
+    # BATH is the only protein engine, so check for it before windowing a
+    # genome we would then be unable to search. A DNA-only run never calls
+    # BATH and must not require it.
+    if aa_dbs:
+        bath_search.require_binaries()
+
     win_size, win_ovl = int(win_size), int(win_ovl)
-    # The window cap exists only for the pyhmmer protein path (translated
-    # frames must stay under the residue limit). BATH and nhmmer search
-    # nucleotides directly and handle long targets, so they keep the user's
-    # window; only cap when the HMMER engine will actually run.
-    if aa_dbs and aa_engine == "hmmer" and win_size + win_ovl > _HMMER_MAX_WIN_NUCL:
-        new_ovl = min(win_ovl, _HMMER_MAX_WIN_OVL)
-        new_size = _HMMER_MAX_WIN_NUCL - new_ovl
-        log.warning(
-            "  HMMER engine: capping window {}+{} -> {}+{} nt to stay under "
-            "pyhmmer's {}-residue limit (overlap still exceeds any TE domain, "
-            "so no domains are lost). Use --bath for large windows.".format(
-                win_size, win_ovl, new_size, new_ovl, _PYHMMER_MAX_AA))
-        win_size, win_ovl = new_size, new_ovl
 
-    cut_fa = os.path.join(outdir, "cut.fa")
-    log.info("Windowing genome (win_size={}, win_ovl={}) -> {}".format(
-        win_size, win_ovl, cut_fa))
-    cut_lengths = cut_genome(input_fasta, cut_fa, win_size=win_size,
-                             win_ovl=win_ovl)
-    log.info("  {} windows".format(len(cut_lengths)))
-
-    aa_fa = os.path.join(outdir, "{}.windows.aa".format(prefix))
+    # Only BATH reads the windowed FASTA; nhmmer searches the raw input. Skip
+    # windowing entirely for a DNA-only run rather than writing a cut.fa that
+    # nothing opens.
+    cut_fa = None
+    if aa_dbs:
+        cut_fa = os.path.join(outdir, "cut.fa")
+        log.info("Windowing genome (win_size={}, win_ovl={}) -> {}".format(
+            win_size, win_ovl, cut_fa))
+        cut_lengths = cut_genome(input_fasta, cut_fa, win_size=win_size,
+                                 win_ovl=win_ovl)
+        log.info("  {} windows".format(len(cut_lengths)))
 
     # nhmmer scans the RAW input genome directly (un-windowed; it handles long
     # targets). Build the block once from the input and reuse it across every DNA
-    # database. Using the input rather than cut.fa makes the DNA-element
-    # annotation independent of the HMMER window cap above.
+    # database, which keeps the DNA-element annotation independent of the window
+    # sizing used for the protein path.
     nucl_block = None
     if nucl_dbs:
         log.info("Building nucleotide block from input for nhmmer")
@@ -545,22 +483,19 @@ def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
             config = dict(config)
             config["_clade_map"] = load_gydb_clade_map()
 
-        engine = "nhmmer" if db_alphabets[name] == DNA_ALPHABET else aa_engine
+        engine = "nhmmer" if db_alphabets[name] == DNA_ALPHABET else "bath"
         log.info("--- Genome search: {} ({}) [{}] ---".format(
             name, os.path.basename(db_path), engine))
         t0 = time.time()
         if engine == "nhmmer":
-            hits, win_lengths = _search_nhmmer(db_path, nucl_block)
-        elif engine == "bath":
-            hits, win_lengths = _search_bath(
-                cut_fa, db_path, name, n_workers, outdir)
+            hits = _search_nhmmer(db_path, nucl_block)
         else:
-            hits, win_lengths = _search_hmmer(cut_fa, aa_fa, db_path, n_workers)
+            hits = _search_bath(cut_fa, db_path, name, n_workers, outdir)
         log.info("  Search done in {:.1f}s".format(time.time() - t0))
 
         n_pass = 0
         for h in hits:
-            result = _hit_to_feature(h, engine, config, win_lengths)
+            result = _hit_to_feature(h, engine, config)
             if result is not None:
                 all_features.append(result[0])
                 n_pass += 1
@@ -575,7 +510,7 @@ def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
     resolved.sort(key=lambda x: (x[0], x[3]))
 
     gff, seqfs, summ = write_outputs(
-        resolved, outdir, prefix, aa_fa, cut_fa, input_fasta)
+        resolved, outdir, prefix, cut_fa, input_fasta)
     log.info("  Feature GFF3: {}".format(gff))
     for p in seqfs:
         log.info("  Feature seqs: {}".format(p))

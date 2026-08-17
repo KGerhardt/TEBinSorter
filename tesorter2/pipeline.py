@@ -91,9 +91,10 @@ def parse_args():
         help="Genome mode: input is genome sequence(s). Windows the genome, "
              "detects TE protein domains throughout, classifies each domain "
              "individually, and emits a feature-level GFF3 + summary table "
-             "(no per-element .cls.tsv, no BLAST pass-2). Works with the "
-             "default HMMER engine and with --bath. DNA databases (e.g. sine) "
-             "are searched with nhmmer to find non-coding elements too.",
+             "(no per-element .cls.tsv, no BLAST pass-2). Protein domains are "
+             "found with BATH, which is required for this mode; DNA databases "
+             "(e.g. sine) are searched with nhmmer to find non-coding elements "
+             "too.",
     )
     parser.add_argument(
         "--win-size",
@@ -172,9 +173,9 @@ def parse_args():
              "search) instead of pyhmmer/HMMER for amino-acid databases. "
              "Runs bathsearch --fs on the raw nucleotide input (no six-frame "
              "translation). BATH covers protein profiles only, so DNA "
-             "databases (AnnoSINE) still go through nhmmer. "
-             "Set BATH_BIN_DIR if bathsearch/bathconvert are not on the "
-             "default path.",
+             "databases (AnnoSINE) still go through nhmmer. Implied by "
+             "--genome, which has no other protein engine. "
+             "Set BATH_BIN_DIR if bathsearch/bathconvert are not on PATH.",
     )
     parser.add_argument(
         "--compat-tesorter-voting",
@@ -404,9 +405,12 @@ def main():
         from . import genome
 
         log.info("Genome mode")
+        if args.bath:
+            log.info("  --bath is implied in genome mode (BATH is the only "
+                     "protein engine there); the flag has no effect.")
         genome.run_genome(
             args.sequence, db_paths, db_alphabets, outdir, prefix,
-            use_bath=args.bath, n_workers=args.processors,
+            n_workers=args.processors,
             win_size=args.win_size, win_ovl=args.win_ovl)
         return
 

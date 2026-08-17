@@ -26,21 +26,56 @@ import tempfile
 
 log = logging.getLogger(__name__)
 
-# BATH binaries. Override the directory with the BATH_BIN_DIR env var.
-_DEFAULT_BATH_BIN_DIR = "/anvil/projects/x-bio250374/daniel/software/BATH_2/BATH/src"
+_RELEASES_URL = "https://github.com/TravisWheelerLab/BATH/releases"
 
-
-def _bath_bin_dir():
-    return os.environ.get("BATH_BIN_DIR", _DEFAULT_BATH_BIN_DIR)
+# Fallback for the original development environment. Only consulted when
+# BATH_BIN_DIR is unset and the binary is not on PATH.
+_LEGACY_BATH_BIN_DIR = "/anvil/projects/x-bio250374/daniel/software/BATH_2/BATH/src"
 
 
 def _bin(name):
-    path = os.path.join(_bath_bin_dir(), name)
-    if not os.path.isfile(path):
+    """Absolute path to a BATH binary.
+
+    Resolution order: BATH_BIN_DIR (an explicit setting always wins, and fails
+    loudly rather than silently falling through), then PATH, then the legacy
+    development directory.
+    """
+    bin_dir = os.environ.get("BATH_BIN_DIR")
+    if bin_dir:
+        path = os.path.join(bin_dir, name)
+        if os.path.isfile(path):
+            return path
         raise FileNotFoundError(
-            f"BATH binary '{name}' not found at {path}. "
-            f"Set BATH_BIN_DIR to the directory containing bathsearch/bathconvert.")
-    return path
+            f"BATH binary '{name}' not found in BATH_BIN_DIR ({bin_dir}).")
+
+    found = shutil.which(name)
+    if found:
+        return found
+
+    path = os.path.join(_LEGACY_BATH_BIN_DIR, name)
+    if os.path.isfile(path):
+        return path
+
+    raise FileNotFoundError(
+        f"BATH binary '{name}' not found on PATH. BATH is not packaged on "
+        f"conda: download a prebuilt binary from {_RELEASES_URL} (or build "
+        f"from source), then put it on PATH or set BATH_BIN_DIR.")
+
+
+def require_binaries():
+    """Fail early if BATH is missing.
+
+    Genome mode searches protein profiles exclusively with BATH, so this runs
+    before any expensive setup rather than letting the run window a genome and
+    then die at the first search. Re-raised as SystemExit: a missing external
+    dependency is a user-facing configuration problem, not a crash, so it
+    should print the instructions rather than a traceback.
+    """
+    for name in ("bathsearch", "bathconvert"):
+        try:
+            _bin(name)
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc))
 
 
 # Optional pre-converted BATH HMMs, keyed by TEsorter2 db alias. Used as a

@@ -12,7 +12,7 @@ keeps its classification semantics while introducing three major improvements:
    engine performs frameshift-aware translated search directly against nucleotide sequence.
 3. **Reproducibility**: clade assignment uses a score-weighted vote instead of a count-based vote
    whose ties were broken by internal data-structure ordering.
-It also adds multi-database reconciliation in a single run and a genome mode for both engines.
+It also adds multi-database reconciliation in a single run and a BATH-based genome mode.
 
 ## Installation
 
@@ -49,17 +49,26 @@ tesorter2 input.fasta --db-dir /path/to/db     # or: export TESORTER2_DB=/path/t
 
 Individual databases can also be passed by path: `-d /path/to/custom.hmm`.
 
-### BATH (optional, only for `--bath`)
+### BATH (required for `--genome`, optional for `--bath`)
 
-[BATH](https://github.com/TravisWheelerLab/BATH) is not available on conda and must be built from
-source. Put `bathsearch`/`bathconvert` on `PATH`, or set `BATH_BIN_DIR`.
+[BATH](https://github.com/TravisWheelerLab/BATH) is not packaged on conda. Download a prebuilt
+binary from the [releases page](https://github.com/TravisWheelerLab/BATH/releases) (macOS needs one
+extra command to bypass binary signing) or build from source, then put `bathsearch`/`bathconvert`
+on `PATH` or set `BATH_BIN_DIR`.
+
+Genome mode searches protein profiles with BATH exclusively, so BATH is a hard requirement whenever
+`--genome` is used with an amino-acid database. A DNA-only genome run (`-d sine`) uses nhmmer and
+does not need BATH.
 
 ## Choosing an engine
  
 | | Element mode (pre-extracted TEs) | Genome mode (assembly) |
 |---|---|---|
-| **Intact / low-divergence sequence** | **pyHMMER** (default) : fastest | **pyHMMER** or **BATH** |
-| **Degraded / frameshifted copies** | **BATH** (`--bath`) : slower than pyHMMER, more sensitive | **BATH** (`--bath`) : both faster *and* more sensitive |
+| **Intact / low-divergence sequence** | **pyHMMER** (default) : fastest | **BATH** (only engine) |
+| **Degraded / frameshifted copies** | **BATH** (`--bath`) : slower than pyHMMER, more sensitive | **BATH** (only engine) : both faster *and* more sensitive |
+
+Genome mode offers no engine choice: BATH is both faster and more sensitive on long sequences, so
+the pyHMMER genome path was removed rather than kept as a slower, less sensitive alternative.
 
 ---
  
@@ -138,7 +147,8 @@ recovered as a single hit with its true extent. No six-frame translation is perf
 - Minus-strand coordinates are normalized to ascending order, with strand encoded in the target
   suffix, matching the HMMER convention.
 - Incompatible with `--facet`.
-- 
+- Implied by `--genome`, where BATH is the only protein engine.
+
 ### Genome mode (`--genome`)
  
 Treats the input as whole-genome sequence rather than pre-extracted elements: detects TE protein
@@ -146,16 +156,22 @@ domains throughout, classifies **each domain individually**, resolves overlappin
 emits a domain-level GFF3 plus a summary table. It does not produce a per-element `.cls.tsv` and
 does not run BLAST pass-2, matching TEsorter's `-genome` behaviour.
  
-- **pyHMMER**: six-frame translates each window, then maps amino-acid envelope coordinates back to
-  nucleotide space. Window size is capped automatically to stay under pyHMMER's 100k-residue
-  per-sequence limit; the retained overlap exceeds any TE domain, so no domains are lost.
-- **`--bath`**: runs `bathsearch --fs` directly on nucleotide windows. The tblout already reports
-  nucleotide coordinates and strand, so no translation or coordinate back-mapping is needed. BATH
-  additionally streams long targets in ~0.25 Mb blocks overlapped by the maximum expected hit
-  length, reconciling boundary duplicates internally.
+Protein domains are found with **BATH only**. `bathsearch --fs` runs directly on the nucleotide
+windows; the tblout already reports nucleotide coordinates and strand, so no six-frame translation
+or coordinate back-mapping happens at all. BATH additionally streams long targets in ~0.25 Mb
+blocks overlapped by the maximum expected hit length, reconciling boundary duplicates internally.
+`--bath` is therefore implied and has no effect here.
+
+DNA databases (`sine`) are searched with nhmmer against the **raw, un-windowed** input, so
+non-coding elements are annotated independently of the protein path's window sizing. A DNA-only run
+is supported and needs no BATH; windowing is skipped entirely and no `cut.fa` is written.
+
+Overlaps are resolved within each feature type, so a BATH protein-domain feature (`CDS`) and an
+nhmmer element feature (e.g. `SINE_element`) at the same locus coexist as independent layers rather
+than evicting one another.
+
 Window size: `--win-size` (default `1e6`), `--win-ovl` (default `1e5`).
-Requires at least one amino-acid database; DNA-only databases (`sine`) are skipped.
-Incompatible with `--facet`.
+Requires at least one database; incompatible with `--facet`.
  
 ### Multiple databases
  
@@ -260,8 +276,8 @@ tesorter2 <sequence> [options]
 | `--prefix` | input basename | Output file prefix |
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
-| `--bath` | off | Frameshift-aware BATH engine (AA databases only) |
-| `--genome` | off | Genome mode: domain-level annotation + GFF3 |
+| `--bath` | off | Frameshift-aware BATH engine (AA databases only; implied by `--genome`) |
+| `--genome` | off | Genome mode: domain-level annotation + GFF3 (BATH required) |
 | `--win-size` | `1e6` | Genome mode window size |
 | `--win-ovl` | `1e5` | Genome mode window overlap |
 | `--emit-bath` | off | Emit routed FASTA partitions for BATH to `{outdir}/BATHwater/` |
@@ -282,10 +298,10 @@ tesorter2 <sequence> [options]
 | `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
-| `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
+| `{prefix}.dom.fna` | Genome mode: nucleotide sequences of each classified feature |
 | `{prefix}.genome.summary.tsv` | Genome mode: Order/Superfamily/Clade tallies |
 | `blast_pass2/` | BLAST database and query chunks (temporary) |
-| `cut.fa` | Genome mode: windowed genome (temporary) |
+| `cut.fa` | Genome mode: windowed genome, written only when a protein database is searched (temporary) |
  
 ---
  
@@ -313,11 +329,13 @@ Complete *Oryza sativa* genome (~375 Mb) against REXdb.
 | Pipeline | Engine | Time | Speedup vs TEsorter |
 |---|---|---|---|
 | TEsorter | HMMER (`hmmscan`) | 2,127 s | 1.0× |
-| TEsorter2 | pyHMMER | 988 s | 2.2× |
+| TEsorter2 | pyHMMER *(path since removed)* | 988 s | 2.2× |
 | **TEsorter2** | **BATH** | **431 s** | **4.9×** |
  
 BATH is 2.3× faster than pyHMMER here because it avoids the six-frame translation and coordinate
-back-mapping that dominate the HMMER path on long sequences.
+back-mapping that dominate the HMMER path on long sequences. Being both faster and more sensitive
+on long targets is why the pyHMMER genome path was removed; the row is retained as the measurement
+that motivated the decision.
 
 ---
  
@@ -331,10 +349,10 @@ back-mapping that dominate the HMMER path on long sequences.
 | `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
 | `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
-| `{prefix}.dom.faa` / `.dom.fna` | Genome mode: domain sequences (AA for HMMER, nucleotide for BATH) |
+| `{prefix}.dom.fna` | Genome mode: nucleotide sequences of each classified feature |
 | `{prefix}.genome.summary.tsv` | Genome mode: Order/Superfamily/Clade tallies |
 | `blast_pass2/` | BLAST database and query chunks (temporary) |
-| `cut.fa` | Genome mode: windowed genome (temporary) |
+| `cut.fa` | Genome mode: windowed genome, written only when a protein database is searched (temporary) |
  
 ---
  
