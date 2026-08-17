@@ -51,10 +51,19 @@ Individual databases can also be passed by path: `-d /path/to/custom.hmm`.
 
 ### BATH (required for `--genome`, optional for `--bath`)
 
-[BATH](https://github.com/TravisWheelerLab/BATH) is not packaged on conda. Download a prebuilt
-binary from the [releases page](https://github.com/TravisWheelerLab/BATH/releases) (macOS needs one
-extra command to bypass binary signing) or build from source, then put `bathsearch`/`bathconvert`
-on `PATH` or set `BATH_BIN_DIR`.
+[BATH](https://github.com/TravisWheelerLab/BATH) is not packaged on conda, and despite what its
+`INSTALL` file suggests, it publishes no release artifacts — the repo carries tags but zero
+releases. A source build is the only route. Easel is a separate clone, not a submodule:
+
+```bash
+git clone https://github.com/TravisWheelerLab/BATH.git
+cd BATH
+git clone -b BATH https://github.com/TravisWheelerLab/easel
+autoconf && ./configure && make
+```
+
+Binaries land in `BATH/src`. Put that on `PATH`, or set `BATH_BIN_DIR` to it. Verified against
+BATH 2.0 (`v2.0.0-rc4`); needs only gcc/make/autoconf.
 
 Genome mode searches protein profiles with BATH exclusively, so BATH is a hard requirement whenever
 `--genome` is used with an amino-acid database. A DNA-only genome run (`-d sine`) uses nhmmer and

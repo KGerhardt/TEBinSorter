@@ -26,7 +26,14 @@ import tempfile
 
 log = logging.getLogger(__name__)
 
-_RELEASES_URL = "https://github.com/TravisWheelerLab/BATH/releases"
+# BATH publishes no release artifacts (the repo has tags but zero releases), so
+# a source build is the only install route.
+_BUILD_HELP = (
+    "build it with:\n"
+    "  git clone https://github.com/TravisWheelerLab/BATH.git\n"
+    "  cd BATH && git clone -b BATH https://github.com/TravisWheelerLab/easel\n"
+    "  autoconf && ./configure && make\n"
+    "then add BATH/src to PATH or set BATH_BIN_DIR to it")
 
 # Fallback for the original development environment. Only consulted when
 # BATH_BIN_DIR is unset and the binary is not on PATH.
@@ -58,8 +65,7 @@ def _bin(name):
 
     raise FileNotFoundError(
         f"BATH binary '{name}' not found on PATH. BATH is not packaged on "
-        f"conda: download a prebuilt binary from {_RELEASES_URL} (or build "
-        f"from source), then put it on PATH or set BATH_BIN_DIR.")
+        f"conda and ships no prebuilt binaries -- {_BUILD_HELP}.")
 
 
 def require_binaries():
@@ -144,51 +150,117 @@ def run_bathsearch(bath_hmm, nucl_fasta, tblout_path, n_workers=4,
     return tblout_path
 
 
+# Multi-token column names, longest first so greedy matching prefers the
+# longest phrase. Everything else in the header is a single token.
+_HEADER_PHRASES = (
+    ("description", "of", "target"),
+    ("hit", "id"), ("target", "name"), ("query", "name"),
+    ("hmm", "len"), ("hmm", "from"), ("hmm", "to"),
+    ("seq", "len"), ("ali", "from"), ("ali", "to"),
+    ("env", "from"), ("env", "to"),
+)
+
+# Columns the hit dict cannot be built without.
+_REQUIRED_COLUMNS = ("target name", "query name", "hmm len", "hmm from",
+                     "hmm to", "seq len", "ali from", "ali to", "e-value",
+                     "score")
+
+
+def _tblout_columns(name_line):
+    """Map column name -> token index from the tblout's column-name line.
+
+    BATH's column set is not stable across versions. 1.x reports env
+    coordinates; 2.0 drops them, prepends a numeric "hit ID", and appends
+    PID / shifts / stops. Reading by name keeps one parser correct for both,
+    and for whatever the next release moves.
+
+    Matching is done on the token stream rather than by slicing at the rule
+    line's dash positions: column values are right-aligned and headers are not
+    reliably within their own dash run, so position-slicing shears multi-word
+    names apart ("env fro", "m    env t") and then fails silently. Greedy
+    longest-phrase matching is whitespace-independent instead.
+
+    Every column before the free-text description is a single whitespace-free
+    token in the data rows, so token index == column index.
+    """
+    tokens = [t.lower() for t in name_line.lstrip("#").split()]
+    cols, i, idx = {}, 0, 0
+    while i < len(tokens):
+        for phrase in _HEADER_PHRASES:
+            if tuple(tokens[i:i + len(phrase)]) == phrase:
+                cols.setdefault(" ".join(phrase), idx)
+                i += len(phrase)
+                break
+        else:
+            # Two columns are both "accession"; neither is read, and
+            # first-wins keeps the map unambiguous.
+            cols.setdefault(tokens[i], idx)
+            i += 1
+        idx += 1
+    return cols
+
+
 def parse_bath_tblout(tblout_path):
     """Parse a BATH tblout into hit dicts for results.store_legacy.
 
-    Column layout, relative to `base` (the index of the target-name column):
-      +0 target  +2 query  +4 hmm_len  +5 hmm_from  +6 hmm_to  +7 seq_len
-      +8 ali_from  +9 ali_to  +10 env_from  +11 env_to  +12 E-value  +13 score
-      +14 bias  ...
-
-    BATH 2.0 prepends a numeric "hit ID" column (base=1) and inserts a PID
-    column after bias; BATH 1.x has neither (base=0). We never read past +14
-    (bias), so the differing trailing columns are irrelevant -- only `base`
-    matters. `base` is read once from the column-name header line, which is
-    always emitted: it starts with "hit ID" for 2.0 and "target name" for 1.x.
-    (Detecting `base` from the data rows would be ambiguous: a purely-numeric
-    target name -- e.g. an Ensembl chromosome "1" -- is indistinguishable from
-    a 2.0 numeric hit-ID.)
+    Columns are located by name (see _tblout_columns) rather than by fixed
+    offset. When the engine reports no env coordinates -- BATH 2.0 does not --
+    the ali coordinates stand in, which is what the downstream geometry wants
+    anyway: for BATH the reported alignment IS the domain envelope.
     """
     hits = []
-    base = 0
+    cols = None
     with open(tblout_path) as f:
         for line in f:
             if line.startswith("#"):
-                header = line.lstrip("#").split()
-                if header[:2] == ["hit", "ID"]:
-                    base = 1
-                elif header[:2] == ["target", "name"]:
-                    base = 0
+                # The column-name line is the one naming the target column.
+                if cols is None:
+                    found = _tblout_columns(line)
+                    if "target name" in found:
+                        missing = [c for c in _REQUIRED_COLUMNS
+                                   if c not in found]
+                        if missing:
+                            raise ValueError(
+                                f"{tblout_path}: BATH tblout header is missing "
+                                f"required column(s) {missing}. Parsed header: "
+                                f"{sorted(found)}")
+                        cols = found
                 continue
-            p = line.split()
-            if len(p) < base + 15:
-                continue
+            if cols is None:
+                # Never fall back to guessing offsets: a mis-read header would
+                # silently yield zero hits, which looks like "BATH found
+                # nothing" rather than a parse failure.
+                raise ValueError(
+                    f"{tblout_path}: no column header found; refusing to parse "
+                    f"BATH output by guessed offsets.")
 
-            seq_name = p[base + 0]
-            hmm_name = p[base + 2]
-            hmm_len = int(p[base + 4])
-            hmm_from = int(p[base + 5])
-            hmm_to = int(p[base + 6])
-            seq_len = int(p[base + 7])
-            ali_from = int(p[base + 8])
-            ali_to = int(p[base + 9])
-            env_from = int(p[base + 10])
-            env_to = int(p[base + 11])
-            evalue = float(p[base + 12])
-            score = float(p[base + 13])
-            bias = float(p[base + 14])
+            p = line.split()
+
+            def col(name, cast=str, default=None):
+                idx = cols.get(name)
+                if idx is None or idx >= len(p):
+                    return default
+                return cast(p[idx])
+
+            seq_name = col("target name")
+            hmm_name = col("query name")
+            hmm_len = col("hmm len", int)
+            if seq_name is None or hmm_name is None or hmm_len is None:
+                continue
+            hmm_from = col("hmm from", int)
+            hmm_to = col("hmm to", int)
+            seq_len = col("seq len", int)
+            ali_from = col("ali from", int)
+            ali_to = col("ali to", int)
+            # BATH 2.0 reports no envelope; the alignment is the envelope.
+            env_from = col("env from", int, ali_from)
+            env_to = col("env to", int, ali_to)
+            evalue = col("e-value", float)
+            score = col("score", float)
+            bias = col("bias", float, 0.0)
+            if None in (hmm_from, hmm_to, seq_len, ali_from, ali_to,
+                        evalue, score):
+                continue
 
             # BATH reports descending coords on the minus strand. Encode strand
             # in the target suffix (matching results._parse_frame_info's
