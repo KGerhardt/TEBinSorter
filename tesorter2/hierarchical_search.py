@@ -319,8 +319,19 @@ ENGINES = {
 DNA_STAGES = ("nhmmer",)
 
 
-def build_stages(names):
-    """Instantiate engines from a list of names (e.g. ['bath', 'pyhmmer'])."""
+def build_stages(names, mask_stops=False):
+    """Instantiate engines from a list of names (e.g. ['bath', 'pyhmmer']).
+
+    nail cannot read stop codons -- it rejects '*' outright -- so its stage
+    masks its own targets no matter what the run was configured to do. With
+    global masking off, a cascade containing nail would therefore run stage 0
+    on masked input and later stages on unmasked input. That is not a cosmetic
+    inconsistency: masking changes what is found (15 -> 17 classified on the
+    TIR fixture), so the early stage would be deciding exits against evidence
+    the later stages never see, and any comparison between the stages would be
+    measuring the substitution rather than the engines. Refuse rather than
+    silently mix.
+    """
     stages = []
     for n in names:
         n = n.strip()
@@ -328,6 +339,14 @@ def build_stages(names):
             raise ValueError("Unknown engine %r; known engines: %s"
                              % (n, ", ".join(sorted(ENGINES))))
         stages.append(ENGINES[n]())
+
+    if not mask_stops and any(s.name == "nail" for s in stages) \
+            and any(s.input_kind == "aa" and s.name != "nail" for s in stages):
+        raise SystemExit(
+            "A cascade containing nail alongside another amino-acid engine "
+            "requires --mask-stops. nail cannot read stop codons and masks its "
+            "own targets regardless, so without global masking its stage would "
+            "search different sequence than the stages behind it.")
     return stages
 
 
@@ -525,7 +544,7 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
     for db_name, db_path in db_paths.items():
         is_dna = db_alphabets[db_name] == DNA_ALPHABET
         names = DNA_STAGES if is_dna else protein_stages
-        stages = build_stages(names)
+        stages = build_stages(names, mask_stops=mask_stops)
 
         # External tools are hard dependencies only if a stage uses them.
         if any(s.name == "bath" for s in stages):
