@@ -64,13 +64,17 @@ def _trim_to_codon(length, frame):
     return frame + (usable - usable % 3)
 
 
-def six_frame_translate_seq(name, sequence):
+def six_frame_translate_seq(name, sequence, stop_char="*"):
     """
     Six-frame translate a single nucleotide sequence.
 
     Args:
         name: sequence identifier (str)
         sequence: nucleotide sequence (str, uppercase)
+        stop_char: character to emit for stop codons. "*" (default) is the
+            faithful translation. "X" masks stops as unknown residues, which
+            lets a profile align through a premature stop instead of being cut
+            short by it -- see translate_fasta.
 
     Yields:
         (frame_name, aa_sequence_str) tuples for each of the 6 frames.
@@ -94,6 +98,8 @@ def six_frame_translate_seq(name, sequence):
         )
         aa = ts.digitize(DNA_ALPHABET).translate()
         aa_text = aa.textize().sequence
+        if stop_char != "*":
+            aa_text = aa_text.replace("*", stop_char)
 
         yield frame_name, aa_text
 
@@ -115,7 +121,7 @@ def load_sequences_dict(fasta_path):
     return {rec.name: str(rec.seq) for rec in fa}
 
 
-def translate_fasta(input_fasta, output_fasta):
+def translate_fasta(input_fasta, output_fasta, mask_stops=False):
     """
     Six-frame translate all sequences in a FASTA file.
 
@@ -123,15 +129,31 @@ def translate_fasta(input_fasta, output_fasta):
     writes the amino acid sequences to output_fasta, and builds a
     pyfastx index on the output.
 
+    mask_stops writes stop codons as 'X' (unknown residue) instead of '*'
+    (terminator). This is off by default because it is not a neutral
+    formatting choice -- it changes what the search finds. A profile cut short
+    by a premature stop can align straight through the masked position, which
+    recovers domains in degraded, pseudogenized copies. Measured on a 60-element
+    TIR fixture, pyhmmer classified 15 sequences with stops intact and 17 with
+    stops masked, one of them going from no hit at all to score 20.5 across
+    hmm 59-148.
+
+    It covers only the in-frame part of what BATH does: masking cannot shift
+    reading frame at an indel. The false-positive cost -- aligning through
+    stop-rich non-coding sequence -- is not yet characterized, which is the
+    other reason this defaults off.
+
     Args:
         input_fasta: path to input nucleotide FASTA
         output_fasta: path for output amino acid FASTA
+        mask_stops: emit 'X' rather than '*' for stop codons
 
     Returns:
         dict of {original_seq_name: seq_length} from the input
     """
     fa = open_input(input_fasta)
     nucl_lengths = {}
+    stop_char = "X" if mask_stops else "*"
 
     with open(output_fasta, "w") as fout:
         for rec in fa:
@@ -139,7 +161,8 @@ def translate_fasta(input_fasta, output_fasta):
             sequence = clean_seq(str(rec.seq).upper())
             nucl_lengths[name] = len(sequence)
 
-            for frame_name, aa_seq in six_frame_translate_seq(name, sequence):
+            for frame_name, aa_seq in six_frame_translate_seq(
+                    name, sequence, stop_char=stop_char):
                 fout.write(f">{frame_name}\n{aa_seq}\n")
 
     # Build pyfastx index on the output

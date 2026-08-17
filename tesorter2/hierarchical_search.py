@@ -491,7 +491,7 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
 def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
                 protein_stages=("pyhmmer", "bath"), n_workers=4,
                 reject_floors=None, compat_rounding=False,
-                compat_voting=False, aa_fasta=None):
+                compat_voting=False, aa_fasta=None, mask_stops=False):
     """Run the cascade for every database. Returns {db_name: [results]}.
 
     Databases are searched independently and reconciled by the caller, exactly
@@ -517,8 +517,9 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
         a == AMINO_ALPHABET for a in db_alphabets.values())
     if needs_aa and not sources["aa"]:
         sources["aa"] = os.path.join(outdir, "cascade_input.aa")
-        log.info("Six-frame translating input for AA engines")
-        translate_fasta(input_fasta, sources["aa"])
+        log.info("Six-frame translating input for AA engines%s",
+                 " (stops masked as X)" if mask_stops else "")
+        translate_fasta(input_fasta, sources["aa"], mask_stops=mask_stops)
 
     per_db = {}
     for db_name, db_path in db_paths.items():
@@ -593,6 +594,11 @@ def main(argv=None):
              "(e.g. pyhmmer=0.05). Off by default: rejection is the only "
              "lossy step, so a floor should be set from measurement showing "
              "it retains what later stages would have classified.")
+    p.add_argument(
+        "--mask-stops", action="store_true", default=False,
+        help="Translate stop codons as 'X' rather than '*', letting profiles "
+             "align through premature stops. Off by default; see "
+             "sequence.translate_fasta for what it changes.")
     p.add_argument("--compat-tesorter-voting", action="store_true",
                    default=False)
     p.add_argument("--compat-tesorter-rounding", action="store_true",
@@ -628,7 +634,8 @@ def main(argv=None):
         protein_stages=[s.strip() for s in args.stages.split(",")],
         n_workers=args.processors, reject_floors=reject_floors,
         compat_rounding=args.compat_tesorter_rounding,
-        compat_voting=args.compat_tesorter_voting)
+        compat_voting=args.compat_tesorter_voting,
+        mask_stops=args.mask_stops)
 
     index_hits_tables(conn)
 

@@ -181,6 +181,18 @@ def parse_args():
              "Set BATH_BIN_DIR if bathsearch/bathconvert are not on PATH.",
     )
     parser.add_argument(
+        "--mask-stops",
+        action="store_true",
+        default=False,
+        help="Six-frame translate stop codons as 'X' (unknown residue) rather "
+             "than '*' (terminator), letting a profile align through a "
+             "premature stop instead of being cut short by it. Recovers "
+             "domains in degraded copies -- 15 -> 17 classified on a 60-element "
+             "TIR fixture -- but covers only the in-frame part of what --bath "
+             "does, and its false-positive cost is not yet characterized. "
+             "Off by default; affects the translated (amino-acid) path only.",
+    )
+    parser.add_argument(
         "--compat-tesorter-voting",
         action="store_true",
         default=False,
@@ -439,9 +451,10 @@ def main():
         for f in [aa_fasta + ".fxi"]:
             if os.path.exists(f):
                 os.remove(f)
-        log.info("Six-frame translating input sequences")
+        log.info("Six-frame translating input sequences%s",
+                 " (stops masked as X)" if args.mask_stops else "")
         t0 = time.time()
-        translate_fasta(args.sequence, aa_fasta)
+        translate_fasta(args.sequence, aa_fasta, mask_stops=args.mask_stops)
         t1 = time.time()
         log.info(f"  Translation done in {t1 - t0:.1f}s -> {aa_fasta}")
         aa_block = build_sequence_block(aa_fasta, AMINO_ALPHABET)

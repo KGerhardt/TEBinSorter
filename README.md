@@ -154,6 +154,23 @@ the models likely to produce its best hit:
 DNA databases always use the default search (nhmmer); DNA facets do not repay their overhead.
 Incompatible with `--bath` and `--genome`.
  
+### Stop-codon masking (`--mask-stops`)
+
+Six-frame translation writes stop codons as `*`, which terminates an alignment. `--mask-stops`
+writes them as `X` (unknown residue) instead, so a profile can align straight through a premature
+stop rather than being cut short by it — recovering domains in degraded, pseudogenized copies.
+
+On a 60-element TIR fixture, pyHMMER classified 15 sequences with stops intact and 17 with stops
+masked; one went from no hit at all to score 20.5 across hmm 59–148.
+
+This covers only the in-frame part of what `--bath` does: masking cannot shift reading frame at an
+indel. Its false-positive cost — aligning through stop-rich non-coding sequence — is not yet
+characterized, which is why it is off by default.
+
+Note that `nail` *requires* this substitution (it rejects `*` outright) and applies it to its own
+targets regardless. Any nail-versus-pyHMMER comparison must therefore set `--mask-stops` on both
+sides, or the difference measured is the substitution rather than the engine.
+
 ### BATH mode (`--bath`)
  
 Replaces pyHMMER with `bathsearch --fs` for amino-acid databases. BATH aligns protein pHMMs
@@ -303,6 +320,7 @@ tesorter2 <sequence> [options]
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
 | `--bath` | off | Frameshift-aware BATH engine (AA databases only; implied by `--genome`) |
+| `--mask-stops` | off | Translate stop codons as `X` instead of `*`, letting profiles align through premature stops |
 | `--genome` | off | Genome mode: domain-level annotation + GFF3 (BATH required) |
 | `--win-size` | `1e6` | Genome mode window size |
 | `--win-ovl` | `1e5` | Genome mode window overlap |
