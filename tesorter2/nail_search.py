@@ -16,11 +16,25 @@ Two integration details that are not in nail's documentation:
 **Stop codons must be removed.** nail rejects '*' outright ("byte 42 is not in
 the compressed amino acid alphabet"), and a six-frame translation is full of
 them -- 24,072 in a 60-sequence test library. Targets are therefore rewritten
-with '*' -> 'X' before the search. X is the standard unknown-residue character
-and contributes ~0 to the score, so a domain interrupted by a stop scores about
-what it would if the stop were simply unmatched, rather than aborting the run.
-The rewrite is nail-local: the shared translated FASTA keeps its stop codons
-for the pyhmmer path, which handles them natively.
+with '*' -> 'X' before the search. The rewrite is nail-local: the shared
+translated FASTA keeps its stop codons for the pyhmmer path, which handles them
+natively.
+
+That substitution is NOT neutral, and anything comparing nail against another
+engine has to control for it. X is an unknown residue rather than a stop, so a
+profile can align straight through a premature stop instead of being cut short
+by it. Measured on the TIR fixture: pyhmmer classifies 15 sequences on
+stop-bearing targets and 17 on the same targets with '*' -> 'X', and one
+sequence goes from no hit at all to score 20.5 over hmm 59-148. Handing nail
+X-substituted targets while pyhmmer reads stop-bearing ones therefore flatters
+nail by exactly that margin: on identical X-substituted input nail produces no
+call pyhmmer does not, which is what nail's own benchmarks predict (it recovers
+most of the MMseqs2-to-HMMER recall gap, so it sits at or below HMMER).
+
+The gain from X-substitution is a separate finding worth its own experiment: it
+is a cheap partial substitute for BATH's read-through-stops behaviour, though
+only the in-frame part -- it cannot change frame at an indel, which is the rest
+of what BATH does.
 
 **Model length is not in the output.** nail reports query start/end but never
 the profile's length, which the classifier needs for coverage and normalized
