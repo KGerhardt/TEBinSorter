@@ -102,7 +102,7 @@ from .sequence import translate_fasta
 from .subset import subset_fasta, base_name
 from .classifier import classify_sequences, store_classifications, DB_CONFIGS
 from .results import store_legacy
-from . import bath_search
+from . import bath_search, nail_search
 
 
 log = logging.getLogger(__name__)
@@ -279,24 +279,32 @@ class BathEngine(Engine):
 class NailEngine(Engine):
     """nail: MMseqs2-seeded sparse approximation of HMMER's Forward/Backward.
 
-    Not implemented. The interface is settled -- nail takes a p7HMM query and a
-    protein FASTA target, needs mmseqs on PATH, and writes its own tabular
-    format -- but its results.tbl column layout has not been verified against a
-    real run here, and writing a parser from documentation is exactly how the
-    BATH tblout parser came to be silently wrong. Implement `search` after
-    running nail once and reading its output.
+    Reads the HMMER3 .hmm directly, so no conversion step. Amino-acid only.
+
+    Intended as a cheap first stage. Note that nail exposes no -Z equivalent,
+    so search_space_mb cannot be honoured: its E-values scale with whatever
+    target set it is handed. Harmless at stage 0, which sees the full input;
+    placed later its verdicts would drift with how much upstream stages
+    removed, and nothing in its CLI can correct for it. See nail_search.
     """
 
     name = "nail"
     input_kind = "aa"
     db_kinds = ("aa",)
 
+    def __init__(self, report_evalue=10.0):
+        self.report_evalue = report_evalue
+
     def search(self, db_path, fasta, db_name, workdir, n_workers,
                search_space_mb=None):
-        raise NotImplementedError(
-            "nail is not wired up yet: install it (cargo install nail; needs "
-            "mmseqs on PATH), run it once, and implement parsing against its "
-            "actual results.tbl rather than its documentation.")
+        if search_space_mb is not None:
+            log.debug("    nail: search space cannot be pinned (no -Z)")
+        model_lengths = {h.name.decode() if isinstance(h.name, bytes)
+                         else h.name: h.M
+                         for h in _CACHE.hmms(db_path)}
+        return nail_search.run_and_parse(
+            db_path, fasta, db_name, model_lengths, workdir,
+            n_workers=n_workers, report_evalue=self.report_evalue)
 
 
 ENGINES = {
@@ -518,9 +526,11 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
         names = DNA_STAGES if is_dna else protein_stages
         stages = build_stages(names)
 
-        # BATH is a hard dependency only if a stage actually uses it.
+        # External tools are hard dependencies only if a stage uses them.
         if any(s.name == "bath" for s in stages):
             bath_search.require_binaries()
+        if any(s.name == "nail" for s in stages):
+            nail_search.require_binaries()
 
         log.info("--- Cascade: %s [%s] ---", db_name,
                  " -> ".join(s.name for s in stages))

@@ -69,6 +69,19 @@ Genome mode searches protein profiles with BATH exclusively, so BATH is a hard r
 `--genome` is used with an amino-acid database. A DNA-only genome run (`-d sine`) uses nhmmer and
 does not need BATH.
 
+### nail (optional, for cascade stages)
+
+[nail](https://github.com/TravisWheelerLab/nail) seeds with MMseqs2 and approximates HMMER's
+Forward/Backward. It is only needed when a `--stages` list includes `nail`:
+
+```bash
+cargo install nail        # needs MMseqs2 on PATH; nail shells out to it for seeding
+```
+
+It reads HMMER3 `.hmm` files directly, so there is no conversion step. Amino-acid only: it cannot
+search DNA profile databases and has no role in genome mode. Verified against nail 0.7.1 with
+MMseqs2 18.8cc5c.
+
 ## Choosing an engine
  
 | | Element mode (pre-extracted TEs) | Genome mode (assembly) |
