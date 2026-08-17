@@ -602,12 +602,18 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False,
     return results
 
 
-def store_classifications(conn, results, database=None, mode="default"):
+def store_classifications(conn, results, database=None, mode="default",
+                          engine=None, stage=0):
     """Store classification results in SQLite.
 
     The mode column discriminates default-mode classifications from
     facet-mode classifications so both can coexist in a single
     companion database.
+
+    engine/stage carry cascade provenance: which search tool produced the
+    evidence behind this call and at which cascade position it was resolved.
+    Both are per-call rather than per-run because one database's sequences may
+    be resolved by different engines at different stages.
     """
     # Indexes on this table are built by results.finalize_db at the end
     # of the pipeline, not here — this function is called once per
@@ -623,18 +629,23 @@ def store_classifications(conn, results, database=None, mode="default"):
             strand      TEXT NOT NULL,
             domains     TEXT,
             source      TEXT NOT NULL DEFAULT 'hmm',
-            mode        TEXT NOT NULL DEFAULT 'default'
+            mode        TEXT NOT NULL DEFAULT 'default',
+            engine      TEXT,
+            stage       INTEGER NOT NULL DEFAULT 0
         )
     """)
 
     rows = [(r["id"], database, r["order"], r["superfamily"], r["clade"],
              r["complete"], r["strand"], r["domains"],
              r.get("blast_source", "hmm") if "blast_source" in r else "hmm",
-             mode)
+             mode,
+             r.get("engine", engine), r.get("stage", stage))
             for r in results]
 
     conn.executemany(
-        "INSERT INTO classifications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO classifications (seq_id, database, te_order, superfamily, "
+        "clade, complete, strand, domains, source, mode, engine, stage) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()

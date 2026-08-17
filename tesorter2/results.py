@@ -37,8 +37,16 @@ _HIT_COLUMNS = """
     env_from    INTEGER NOT NULL,
     env_to      INTEGER NOT NULL,
     acc         REAL NOT NULL,
-    search_mode INTEGER NOT NULL DEFAULT 0
+    search_mode INTEGER NOT NULL DEFAULT 0,
+    engine      TEXT NOT NULL DEFAULT '',
+    stage       INTEGER NOT NULL DEFAULT 0
 """
+# engine/stage are the cascade's provenance: which tool produced a hit and at
+# which position in the per-database cascade. A single-engine run leaves engine
+# at the tool's own name and stage at 0. They are on the hit rows rather than
+# inferred later because a cascade run mixes engines within one database, and
+# scores from different engines are not on a comparable scale -- any analysis
+# that compares them has to be able to tell them apart.
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS sequences (
@@ -73,6 +81,7 @@ _HITS_TABLE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_leg_domain  ON legacy_hits(domain_type)",
     "CREATE INDEX IF NOT EXISTS idx_leg_evalue  ON legacy_hits(i_evalue)",
     "CREATE INDEX IF NOT EXISTS idx_leg_db      ON legacy_hits(database)",
+    "CREATE INDEX IF NOT EXISTS idx_leg_engine  ON legacy_hits(engine)",
     "CREATE INDEX IF NOT EXISTS idx_fac_target  ON facet_hits(target_name)",
     "CREATE INDEX IF NOT EXISTS idx_fac_baseseq ON facet_hits(base_seq)",
     "CREATE INDEX IF NOT EXISTS idx_fac_query   ON facet_hits(query_name)",
@@ -114,10 +123,12 @@ _INSERT_COLS = (
     "evalue, score, bias, dom_num, dom_of, "
     "c_evalue, i_evalue, dom_score, dom_bias, "
     "hmm_from, hmm_to, ali_from, ali_to, "
-    "env_from, env_to, acc, search_mode"
+    "env_from, env_to, acc, search_mode, engine, stage"
 )
 
-_INSERT_PLACEHOLDERS = ", ".join(["?"] * 26)
+# Derived from _INSERT_COLS rather than hardcoded: the two must always agree,
+# and a stale count fails at insert time with an unhelpful message.
+_INSERT_PLACEHOLDERS = ", ".join(["?"] * len(_INSERT_COLS.split(",")))
 
 
 def create_db(db_path):
@@ -222,8 +233,12 @@ def _parse_domain_type(query_name):
     return query_name.split("_")[0]
 
 
-def _hits_to_rows(hits, db_name, search_mode=0):
-    """Convert hit dicts to insert-ready tuples."""
+def _hits_to_rows(hits, db_name, search_mode=0, engine="", stage=0):
+    """Convert hit dicts to insert-ready tuples.
+
+    engine/stage stamp cascade provenance onto every row; they default to the
+    single-engine case so existing callers are unchanged.
+    """
     rows = []
     for h in hits:
         base_seq, strand, frame = _parse_frame_info(h["target_name"])
@@ -256,18 +271,21 @@ def _hits_to_rows(hits, db_name, search_mode=0):
             h["env_to"],
             h["acc"],
             search_mode,
+            engine,
+            stage,
         ))
     return rows
 
 
-def store_legacy(conn, hits, db_name):
+def store_legacy(conn, hits, db_name, engine="", stage=0):
     """Store true default-mode (exhaustive) search hits to legacy_hits.
 
     legacy_hits is fully separate from facet_hits. Never write facet
     outputs here, even when facet mode falls back to an exhaustive
     leftover search; that belongs in facet_hits with the matching stage.
     """
-    rows = _hits_to_rows(hits, db_name, search_mode=0)
+    rows = _hits_to_rows(hits, db_name, search_mode=0, engine=engine,
+                         stage=stage)
     conn.executemany(
         f"INSERT INTO legacy_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
         rows,
@@ -275,13 +293,13 @@ def store_legacy(conn, hits, db_name):
     conn.commit()
 
 
-def store_facet(conn, hits, db_name, stage):
+def store_facet(conn, hits, db_name, stage, engine=""):
     """Store facet-mode hits to facet_hits, stamped with the facet stage.
 
     stage must be one of FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
     FACET_STAGE_LEGACY_FALLBACK.
     """
-    rows = _hits_to_rows(hits, db_name, search_mode=stage)
+    rows = _hits_to_rows(hits, db_name, search_mode=stage, engine=engine)
     conn.executemany(
         f"INSERT INTO facet_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
         rows,

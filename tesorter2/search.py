@@ -135,7 +135,7 @@ def _normalize_nucl_hit(hit):
 _EVALUE_FIELDS = ("evalue", "c_evalue", "i_evalue")
 
 
-def legacy_search_nucl(hmms, seq_block):
+def legacy_search_nucl(hmms, seq_block, megabases=None):
     """
     Single-pass nobias search of DNA models against nucleotide sequence.
 
@@ -156,7 +156,10 @@ def legacy_search_nucl(hmms, seq_block):
     That reproduces the nhmmer binary exactly and keeps working if pyhmmer
     fixes the double-scaling.
     """
-    megabases = sum(len(s) for s in seq_block) / 1e6
+    # Caller may pin the search space. A staged cascade must, so that E-values
+    # do not improve simply because an upstream stage removed sequences.
+    if megabases is None:
+        megabases = sum(len(s) for s in seq_block) / 1e6
     hits = _collect_hits(pyhmmer.nhmmer(
         hmms, seq_block,
         bias_filter=False,

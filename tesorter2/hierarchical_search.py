@@ -1,0 +1,631 @@
+"""
+hierarchical_search.py — staged multi-engine search cascade.
+
+A cascade runs several search engines in sequence over one database. Each stage
+searches only the sequences no earlier stage resolved, so a fast engine strips
+the easy majority and the slower, more sensitive engines see a shrinking
+remainder:
+
+    stage 0  engine A  -> classified (done) | rejected (done) | remainder v
+    stage 1  engine B  -> classified (done) | rejected (done) | remainder v
+    stage 2  engine C  -> last recall pass over whatever is left
+
+Two structural decisions:
+
+**The cascade is per database.** Each database runs its own independent
+cascade and reaches its own verdict; a sequence resolved by rexdb still runs
+the full cascade under gydb. Cross-database deconfliction happens only once
+every search is finished, which is where it already happens -- reconciliation
+and BLAST pass-2 both treat "unclassified" as unclassified by *any* database
+(blast_pass2 reads the per-database classifications table, not the reconciled
+set). Running the cascade globally instead would let one database's confident
+call suppress another's search and silently starve the vote. The cost is
+redundant work on sequences some database already resolved, which is accepted.
+
+**Engine order is data, not code.** Stages are a list; swapping the order or
+inserting an engine is a configuration change (`--stages bath,pyhmmer`). Which
+order is best is an empirical question about relative speed and recall, so the
+code deliberately does not encode an answer.
+
+Handoff between stages is a FASTA file, because that is the one interface every
+engine shares -- BATH and nail are subprocesses that read a path, and pyhmmer
+builds its sequence block from one. See subset.subset_fasta.
+
+Pass/fail is decided per *sequence*, never per frame: a translated sequence has
+six records but one verdict, matching where classification already draws the
+line (results._parse_frame_info keys hits by base name).
+
+Each stage classifies using only its own hits. A sequence reaching stage N was
+not classifiable from stages 0..N-1, so there is nothing to carry forward, and
+scores from different engines are not on a comparable scale -- pooling them
+would produce a normalized score with no consistent meaning.
+
+Known caveat -- BATH results are weakly input-grouping dependent
+----------------------------------------------------------------
+Two things make an engine's verdict depend on what else was in its input, and
+only the first is fixed here:
+
+  1. E-value scales with search-space size, so a subset yields better E-values
+     for the same alignment. Fixed: search_space_mb is pinned to the full input
+     and passed to every stage (bathsearch -Z, nhmmer's megabase scaling).
+     Verified: with -Z pinned, common hits keep identical E-values across
+     subsets; without it, none do.
+
+  2. BATH can return a *different alignment* for the same sequence and model
+     depending on which sequences accompany it. Observed on the TIR database:
+     one sequence scored 19.7 (hmm 44-148) alone and in one 45-sequence subset,
+     but 13.6 (hmm 123-148) in the full 60-sequence file -- enough to cross the
+     classification threshold. BATH itself is deterministic (identical output
+     across repeat runs and across --cpu 1 vs 8), and head-subsets of 45/30/15
+     reproduce the full run's scores exactly, so this is not subsetting as such
+     but grouping: it is consistent with BATH's ~0.25 Mb block streaming
+     truncating an alignment at a block boundary.
+
+The cascade does not cause (2), but it does expose it, because different stage
+orders hand BATH differently-grouped inputs. The practical consequences: a
+cascade's output can differ slightly by stage order beyond the intended
+sensitivity difference, and any engine-comparison analysis must hold the input
+file identical rather than compare a full run against a subset run. If that
+proves material, the fix is to run BATH once over the full input and apply the
+cascade filter to its results afterwards -- correct, but it forfeits the
+work-reduction that is the point of staging.
+"""
+
+import logging
+import os
+import time
+
+import numpy as np
+
+from .hmm import (load_hmms, build_optimized_profiles, peek_alphabet,
+                  AMINO_ALPHABET, DNA_ALPHABET)
+from .search import build_sequence_block, legacy_search, legacy_search_nucl
+from .sequence import translate_fasta
+from .subset import subset_fasta, base_name
+from .classifier import classify_sequences, store_classifications, DB_CONFIGS
+from .results import store_legacy
+from . import bath_search
+
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Hit dicts -> the array layout the classifier consumes
+# ---------------------------------------------------------------------------
+
+def hits_to_arrays(hits):
+    """Convert engine hit dicts into the structure classify_sequences expects.
+
+    deconflict.load_hits builds this same layout by reading back from SQLite.
+    The cascade classifies straight from memory instead: a stage's hits are
+    already in hand, and a write-then-read round trip per stage per database
+    would dominate the stages that resolve only a handful of sequences. Hits
+    are still persisted -- that is provenance, not a data dependency.
+
+    Field choices mirror load_hits exactly so both paths classify identically:
+    score is the per-domain score, evalue the independent E-value, and
+    model_len the query (model) length.
+    """
+    if not hits:
+        return None
+
+    target = np.array([h["target_name"] for h in hits])
+    model = np.array([h["query_name"] for h in hits])
+    score = np.array([h["dom_score"] for h in hits], dtype=np.float64)
+    evalue = np.array([h["i_evalue"] for h in hits], dtype=np.float64)
+    acc = np.array([h["acc"] for h in hits], dtype=np.float64)
+    hmm_from = np.array([h["hmm_from"] for h in hits], dtype=np.int32)
+    hmm_to = np.array([h["hmm_to"] for h in hits], dtype=np.int32)
+    model_len = np.array([h["query_len"] for h in hits], dtype=np.int32)
+    env_from = np.array([h["env_from"] for h in hits], dtype=np.int32)
+    env_to = np.array([h["env_to"] for h in hits], dtype=np.int32)
+
+    # Same derivations as deconflict._get_base_seq / _get_family.
+    base = np.array([t.rsplit("|", 1)[0] if "|" in t else t for t in target])
+    family = np.array([
+        m.split(":")[1].split("-")[-1] if ":" in m else m.split("_")[0]
+        for m in model])
+
+    return {
+        "target": target, "model": model, "score": score,
+        "evalue": evalue, "acc": acc,
+        "hmm_from": hmm_from, "hmm_to": hmm_to, "model_len": model_len,
+        "env_from": env_from, "env_to": env_to,
+        "base_seq": base, "family": family,
+        "hmm_cov": 100.0 * (hmm_to - hmm_from + 1) / model_len,
+        "norm_score": score / model_len,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Engines
+# ---------------------------------------------------------------------------
+
+class Engine:
+    """A search tool, reduced to what a cascade needs to know about it.
+
+    name          identifier used in --stages and stamped on every hit
+    input_kind    "aa" if it searches six-frame translations, "nucl" if it
+                  reads nucleotide sequence directly. Decides which FASTA the
+                  driver materializes for this stage.
+    db_kinds      database alphabets it can search
+    """
+
+    name = None
+    input_kind = None
+    db_kinds = ()
+
+    def search(self, db_path, fasta, db_name, workdir, n_workers,
+               search_space_mb=None):
+        """Return a list of hit dicts in the shared internal schema.
+
+        search_space_mb pins the E-value search space to the FULL input rather
+        than to this stage's subset. Engines whose E-values scale with target
+        count (BATH, nhmmer) must honour it or their verdicts drift as upstream
+        stages shrink the input; hmmsearch's Z is a model count and is already
+        stage-invariant, so pyhmmer ignores it.
+        """
+        raise NotImplementedError
+
+
+class _HmmCache:
+    """Models are reloaded per (database, engine); parsing REXdb repeatedly is
+    pure overhead when a cascade revisits it."""
+
+    def __init__(self):
+        self._hmms = {}
+        self._optimized = {}
+
+    def hmms(self, db_path):
+        if db_path not in self._hmms:
+            self._hmms[db_path] = load_hmms(db_path)
+        return self._hmms[db_path]
+
+    def optimized(self, db_path, alphabet):
+        if db_path not in self._optimized:
+            self._optimized[db_path] = build_optimized_profiles(
+                self.hmms(db_path), alphabet=alphabet)
+        return self._optimized[db_path]
+
+
+_CACHE = _HmmCache()
+
+
+class PyhmmerEngine(Engine):
+    """pyHMMER hmmsearch over six-frame translations. The replication
+    baseline: this is the path whose output matches TEsorter."""
+
+    name = "pyhmmer"
+    input_kind = "aa"
+    db_kinds = ("aa",)
+
+    def search(self, db_path, fasta, db_name, workdir, n_workers,
+               search_space_mb=None):
+        # search_space_mb is unused: hmmsearch's Z is len(hmms), so E-values
+        # do not move when the target set shrinks.
+        hmms = _CACHE.hmms(db_path)
+        optimized = _CACHE.optimized(db_path, AMINO_ALPHABET)
+        block = build_sequence_block(fasta, AMINO_ALPHABET)
+        log.info("    pyhmmer: %d models over %d frames", len(hmms), len(block))
+        return legacy_search(hmms, block, optimized=optimized)
+
+
+class NhmmerEngine(Engine):
+    """pyHMMER nhmmer for DNA profile databases. Both strands in one pass;
+    the only engine that can search a DNA database at all, since BATH and
+    nail are protein-profile tools."""
+
+    name = "nhmmer"
+    input_kind = "nucl"
+    db_kinds = ("dna",)
+
+    def search(self, db_path, fasta, db_name, workdir, n_workers,
+               search_space_mb=None):
+        hmms = _CACHE.hmms(db_path)
+        block = build_sequence_block(fasta, DNA_ALPHABET)
+        log.info("    nhmmer: %d models over %d sequences",
+                 len(hmms), len(block))
+        return legacy_search_nucl(hmms, block, megabases=search_space_mb)
+
+
+class BathEngine(Engine):
+    """BATH bathsearch --fs: frameshift-aware translated search run directly
+    on nucleotide sequence, so no translation and no coordinate back-mapping.
+
+    report_evalue caps what reaches the tblout. The classifier's own cutoff is
+    1e-3, so the default leaves one order of magnitude of sub-threshold
+    evidence. A cascade stage that rejects on "no evidence at all" needs a far
+    looser cap than that to have anything to judge -- hence the parameter.
+    """
+
+    name = "bath"
+    input_kind = "nucl"
+    db_kinds = ("aa",)
+
+    def __init__(self, report_evalue=0.01, frameshift=True):
+        self.report_evalue = report_evalue
+        self.frameshift = frameshift
+
+    def search(self, db_path, fasta, db_name, workdir, n_workers,
+               search_space_mb=None):
+        bath_hmm = bath_search.resolve_bath_db(db_path, db_name=db_name)
+        tblout = os.path.join(workdir, "%s.bath.tblout" % db_name)
+        bath_search.run_bathsearch(
+            bath_hmm, fasta, tblout, n_workers=n_workers,
+            frameshift=self.frameshift, report_evalue=self.report_evalue,
+            z_megabases=search_space_mb)
+        return bath_search.parse_bath_tblout(tblout)
+
+
+class NailEngine(Engine):
+    """nail: MMseqs2-seeded sparse approximation of HMMER's Forward/Backward.
+
+    Not implemented. The interface is settled -- nail takes a p7HMM query and a
+    protein FASTA target, needs mmseqs on PATH, and writes its own tabular
+    format -- but its results.tbl column layout has not been verified against a
+    real run here, and writing a parser from documentation is exactly how the
+    BATH tblout parser came to be silently wrong. Implement `search` after
+    running nail once and reading its output.
+    """
+
+    name = "nail"
+    input_kind = "aa"
+    db_kinds = ("aa",)
+
+    def search(self, db_path, fasta, db_name, workdir, n_workers,
+               search_space_mb=None):
+        raise NotImplementedError(
+            "nail is not wired up yet: install it (cargo install nail; needs "
+            "mmseqs on PATH), run it once, and implement parsing against its "
+            "actual results.tbl rather than its documentation.")
+
+
+ENGINES = {
+    "pyhmmer": PyhmmerEngine,
+    "nhmmer": NhmmerEngine,
+    "bath": BathEngine,
+    "nail": NailEngine,
+}
+
+# Applied to DNA databases regardless of the protein cascade: nhmmer is the
+# only engine that can read a DNA profile, so there is nothing to stage.
+DNA_STAGES = ("nhmmer",)
+
+
+def build_stages(names):
+    """Instantiate engines from a list of names (e.g. ['bath', 'pyhmmer'])."""
+    stages = []
+    for n in names:
+        n = n.strip()
+        if n not in ENGINES:
+            raise ValueError("Unknown engine %r; known engines: %s"
+                             % (n, ", ".join(sorted(ENGINES))))
+        stages.append(ENGINES[n]())
+    return stages
+
+
+# ---------------------------------------------------------------------------
+# Cascade
+# ---------------------------------------------------------------------------
+
+CASCADE_EXITS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS cascade_exits (
+    seq_id    TEXT NOT NULL,
+    database  TEXT NOT NULL,
+    stage     INTEGER NOT NULL,
+    engine    TEXT NOT NULL,
+    outcome   TEXT NOT NULL
+)
+"""
+
+
+def _record_exits(conn, db_name, stage_idx, engine_name, seq_ids, outcome):
+    """Log why each sequence left the cascade.
+
+    This is the record the engine-comparison analyses read: which stage
+    resolved a sequence, which rejected it, and which ran out of stages with it
+    still unclassified. None of that is recoverable from the hits table alone,
+    because "no hit" and "hit that failed a filter" look the same there.
+    """
+    if not seq_ids:
+        return
+    conn.execute(CASCADE_EXITS_SCHEMA)
+    conn.executemany(
+        "INSERT INTO cascade_exits (seq_id, database, stage, engine, outcome) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(s, db_name, stage_idx, engine_name, outcome) for s in seq_ids])
+    conn.commit()
+
+
+def _rejected(arrays, remaining, floor):
+    """Sequences to drop as showing no usable evidence.
+
+    A sequence is rejected when its best normalized domain score falls below
+    `floor` -- including the case of no hits at all. Rejection is the only
+    lossy step in the cascade: a rejected sequence never reaches the more
+    sensitive engine behind it, so the floor is only safe once measurement
+    shows it retains everything a later stage would have classified. It is
+    therefore off (floor=None) unless explicitly configured.
+    """
+    if floor is None:
+        return set()
+    best = {}
+    if arrays is not None:
+        for seq, ns in zip(arrays["base_seq"], arrays["norm_score"]):
+            if ns > best.get(seq, float("-inf")):
+                best[seq] = ns
+    return {s for s in remaining if best.get(s, float("-inf")) < floor}
+
+
+def _materialize(kind, remaining, all_names, sources, workdir, tag):
+    """FASTA of `remaining` in the alphabet this engine reads.
+
+    Returns the full source file unchanged when nothing has been resolved yet,
+    which is the common case for stage 0 and avoids copying the whole input.
+    """
+    src = sources[kind]
+    if len(remaining) == len(all_names):
+        return src
+    out = os.path.join(workdir, "%s.%s.fa" % (tag, kind))
+    n_written, _ = subset_fasta(src, out, remaining, exclude=False)
+    log.info("    handoff: %d sequences -> %s", len(remaining),
+             os.path.basename(out))
+    if n_written == 0:
+        return None
+    return out
+
+
+def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
+                       all_names, outdir, n_workers=4, reject_floors=None,
+                       compat_rounding=False, compat_voting=False,
+                       search_space_mb=None):
+    """Run one database's cascade. Returns its classification dicts.
+
+    Every stage's hits land in legacy_hits stamped with engine and stage, and
+    every sequence's exit is recorded in cascade_exits.
+    """
+    config = DB_CONFIGS.get(db_name)
+    if config is None:
+        log.warning("  No classifier config for %s, skipping", db_name)
+        return []
+
+    reject_floors = reject_floors or {}
+    remaining = set(all_names)
+    results = []
+
+    for stage_idx, engine in enumerate(stages):
+        if not remaining:
+            log.info("  [%s] stage %d (%s): nothing left, stopping",
+                     db_name, stage_idx, engine.name)
+            break
+
+        workdir = os.path.join(outdir, "cascade", db_name, "s%d" % stage_idx)
+        os.makedirs(workdir, exist_ok=True)
+
+        fasta = _materialize(engine.input_kind, remaining, all_names,
+                             sources, workdir, db_name)
+        if fasta is None:
+            break
+
+        log.info("  [%s] stage %d (%s): %d sequences",
+                 db_name, stage_idx, engine.name, len(remaining))
+        t0 = time.time()
+        hits = engine.search(db_path, fasta, db_name, workdir, n_workers,
+                             search_space_mb=search_space_mb)
+        log.info("    %d hits in %.1fs", len(hits), time.time() - t0)
+
+        # A stage may see hits for sequences an earlier stage already resolved
+        # when it re-reads a shared source file; keep only the ones still in
+        # play so the stage's verdict cannot overwrite a settled one.
+        hits = [h for h in hits if base_name(h["target_name"]) in remaining]
+
+        if hits:
+            store_legacy(conn, hits, db_name, engine=engine.name,
+                         stage=stage_idx)
+
+        arrays = hits_to_arrays(hits)
+        stage_results = []
+        if arrays is not None:
+            stage_results = classify_sequences(
+                arrays, config,
+                compat_rounding=compat_rounding,
+                compat_voting=compat_voting)
+            for r in stage_results:
+                r["engine"] = engine.name
+                r["stage"] = stage_idx
+
+        labeled = {r["id"] for r in stage_results}
+        remaining -= labeled
+        _record_exits(conn, db_name, stage_idx, engine.name, labeled,
+                      "classified")
+
+        rejected = _rejected(arrays, remaining,
+                             reject_floors.get(engine.name))
+        if rejected:
+            remaining -= rejected
+            _record_exits(conn, db_name, stage_idx, engine.name, rejected,
+                          "rejected")
+
+        results.extend(stage_results)
+        log.info("    %d classified, %d rejected, %d remaining",
+                 len(labeled), len(rejected), len(remaining))
+
+    if remaining:
+        _record_exits(conn, db_name, len(stages) - 1,
+                      stages[-1].name if stages else "", remaining,
+                      "unresolved")
+
+    if results:
+        store_classifications(conn, results, database=db_name,
+                              mode="hierarchical")
+    return results
+
+
+def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
+                protein_stages=("pyhmmer", "bath"), n_workers=4,
+                reject_floors=None, compat_rounding=False,
+                compat_voting=False, aa_fasta=None):
+    """Run the cascade for every database. Returns {db_name: [results]}.
+
+    Databases are searched independently and reconciled by the caller, exactly
+    as the single-engine path does -- this function replaces the per-database
+    search+classify loop, not the cross-database logic after it.
+    """
+    # Pinned once, from the whole input, and reused by every stage of every
+    # database. Without this a stage's E-values improve as upstream stages
+    # remove sequences, so a cascade's verdicts would depend on how much came
+    # before it rather than on the sequence itself.
+    lengths = list(_iter_names(input_fasta))
+    all_names = [name for name, _ in lengths]
+    search_space_mb = sum(n for _, n in lengths) / 1e6
+    log.info("Search space pinned at %.3f Mb (%d sequences)",
+             search_space_mb, len(all_names))
+
+    # The translated FASTA is shared by every AA-reading engine across every
+    # database, so it is built once and subset per stage rather than
+    # regenerated. Only built if some stage actually needs it.
+    sources = {"nucl": input_fasta, "aa": aa_fasta}
+    needs_aa = any(ENGINES[n].input_kind == "aa" for n in protein_stages
+                   if n in ENGINES) and any(
+        a == AMINO_ALPHABET for a in db_alphabets.values())
+    if needs_aa and not sources["aa"]:
+        sources["aa"] = os.path.join(outdir, "cascade_input.aa")
+        log.info("Six-frame translating input for AA engines")
+        translate_fasta(input_fasta, sources["aa"])
+
+    per_db = {}
+    for db_name, db_path in db_paths.items():
+        is_dna = db_alphabets[db_name] == DNA_ALPHABET
+        names = DNA_STAGES if is_dna else protein_stages
+        stages = build_stages(names)
+
+        # BATH is a hard dependency only if a stage actually uses it.
+        if any(s.name == "bath" for s in stages):
+            bath_search.require_binaries()
+
+        log.info("--- Cascade: %s [%s] ---", db_name,
+                 " -> ".join(s.name for s in stages))
+        per_db[db_name] = run_cascade_for_db(
+            conn, db_name, db_path, "dna" if is_dna else "aa", stages,
+            sources, all_names, outdir, n_workers=n_workers,
+            reject_floors=reject_floors, compat_rounding=compat_rounding,
+            compat_voting=compat_voting, search_space_mb=search_space_mb)
+
+    return per_db
+
+
+def _iter_names(fasta):
+    """Stream (name, length) without building an index."""
+    import pyfastx
+    for name, seq in pyfastx.Fasta(fasta, build_index=False):
+        yield name, len(seq)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main(argv=None):
+    import argparse
+
+    from .paths import get_db_dir
+    from .pipeline import DB_ALIASES, resolve_db
+    from .results import create_db, store_sequences, index_hits_tables, finalize_db
+    from .classifier import (export_classification_tsv,
+                             reconcile_classifications)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s")
+
+    p = argparse.ArgumentParser(
+        prog="tesorter2-hierarchical",
+        description="Staged multi-engine search cascade: each stage searches "
+                    "only what earlier stages left unresolved.")
+    p.add_argument("sequence", help="Input FASTA")
+    p.add_argument("-d", "--database", default=None,
+                   help="Comma-separated database aliases or paths "
+                        "[default: every bundled database except sine-so]")
+    p.add_argument("-o", "--outdir", default=None,
+                   help="Output directory [default: {input}.TEsorter2]")
+    p.add_argument("--prefix", default=None, help="Output file prefix")
+    p.add_argument("--db-dir", default=None, help="HMM database directory")
+    p.add_argument("--stages", default="pyhmmer,bath",
+                   help="Ordered protein-engine cascade, comma separated "
+                        "(known: %s). DNA databases always use nhmmer, the "
+                        "only engine that reads DNA profiles. "
+                        "[default: pyhmmer,bath]"
+                        % ", ".join(sorted(ENGINES)))
+    p.add_argument("-p", "--processors", type=int, default=4)
+    p.add_argument(
+        "--reject-floor", default=None,
+        help="Per-engine normalized-score floor below which a sequence is "
+             "dropped instead of passed on, as engine=value pairs "
+             "(e.g. pyhmmer=0.05). Off by default: rejection is the only "
+             "lossy step, so a floor should be set from measurement showing "
+             "it retains what later stages would have classified.")
+    p.add_argument("--compat-tesorter-voting", action="store_true",
+                   default=False)
+    p.add_argument("--compat-tesorter-rounding", action="store_true",
+                   default=False)
+    args = p.parse_args(argv)
+
+    input_base = os.path.basename(args.sequence)
+    outdir = args.outdir or "%s.TEsorter2" % input_base
+    prefix = args.prefix or input_base
+    os.makedirs(outdir, exist_ok=True)
+
+    db_dir = get_db_dir(args.db_dir)
+    if args.database:
+        db_names = [s.strip() for s in args.database.split(",")]
+    else:
+        db_names = [k for k in DB_ALIASES if k != "sine-so"]
+    db_paths = {n: resolve_db(n, db_dir=db_dir) for n in db_names}
+    db_alphabets = {n: peek_alphabet(pth) for n, pth in db_paths.items()}
+
+    reject_floors = {}
+    if args.reject_floor:
+        for item in args.reject_floor.split(","):
+            engine, _, value = item.partition("=")
+            reject_floors[engine.strip()] = float(value)
+
+    db_out = os.path.join(outdir, "%s.db" % prefix)
+    conn = create_db(db_out)
+    store_sequences(conn, {n: ln for n, ln in _iter_names(args.sequence)})
+
+    t0 = time.time()
+    per_db = run_cascade(
+        conn, args.sequence, db_paths, db_alphabets, outdir,
+        protein_stages=[s.strip() for s in args.stages.split(",")],
+        n_workers=args.processors, reject_floors=reject_floors,
+        compat_rounding=args.compat_tesorter_rounding,
+        compat_voting=args.compat_tesorter_voting)
+
+    index_hits_tables(conn)
+
+    for name, results in per_db.items():
+        if results:
+            tsv = os.path.join(outdir, "%s.%s.cls.tsv" % (prefix, name))
+            export_classification_tsv(results, tsv)
+            log.info("  %s: %d classified -> %s", name, len(results), tsv)
+
+    reconciled = reconcile_classifications(per_db)
+    log.info("Reconciled across %d databases: %d sequences",
+             len(per_db), len(reconciled))
+    if reconciled:
+        combined = os.path.join(outdir, "%s.cls.tsv" % prefix)
+        export_classification_tsv(reconciled, combined,
+                                  include_secondary=True, include_so=True,
+                                  include_lineage=True)
+        log.info("  Combined -> %s", combined)
+
+    finalize_db(conn)
+    conn.close()
+    log.info("Done in %.1fs; results database: %s", time.time() - t0, db_out)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

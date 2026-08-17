@@ -96,16 +96,40 @@ KNOWN_CONVERTED = {
 }
 
 
+def _cache_path(hmm_path):
+    """Where the converted BATH HMM for hmm_path should live.
+
+    Beside the source HMM when that directory is writable, which keeps the
+    conversion next to what it was derived from. The bundled databases ship
+    inside the package, though, and an installed package is frequently
+    read-only (site-packages, a conda env, a shared module tree) -- so fall
+    back to a user cache directory rather than failing to convert.
+
+    The fallback key includes the source's size and mtime so a database that
+    is updated in place does not silently keep serving a stale conversion.
+    """
+    directory = os.path.dirname(hmm_path) or "."
+    if os.access(directory, os.W_OK):
+        return hmm_path + ".bath.hmm"
+
+    root = os.environ.get("TESORTER2_CACHE") or os.path.join(
+        os.path.expanduser("~"), ".cache", "tesorter2", "bath")
+    os.makedirs(root, exist_ok=True)
+    st = os.stat(hmm_path)
+    return os.path.join(root, "%s.%d.%d.bath.hmm" % (
+        os.path.basename(hmm_path), st.st_size, int(st.st_mtime)))
+
+
 def resolve_bath_db(hmm_path, db_name=None):
     """Return a path to a BATH-format HMM for the given repo HMMER3 database.
 
     Resolution order:
-      1. Cached sidecar {hmm_path}.bath.hmm (same pattern the repo uses for
-         .similarity_graph.db) — reuse if present.
+      1. Cached conversion (see _cache_path: beside the source HMM when that
+         directory is writable, else under a user cache dir) — reuse if present.
       2. A known pre-converted file for this alias (KNOWN_CONVERTED).
       3. Run bathconvert on hmm_path, writing the cache, and use that.
     """
-    cache = hmm_path + ".bath.hmm"
+    cache = _cache_path(hmm_path)
     if os.path.isfile(cache):
         log.info(f"  BATH HMM (cached): {cache}")
         return cache
@@ -129,20 +153,32 @@ def resolve_bath_db(hmm_path, db_name=None):
 
 
 def run_bathsearch(bath_hmm, nucl_fasta, tblout_path, n_workers=4,
-                   frameshift=True, report_evalue=0.01):
+                   frameshift=True, report_evalue=0.01, z_megabases=None):
     """Run bathsearch, writing a parseable tblout. Returns tblout_path.
 
     frameshift=True enables --fs (BATH's frameshift-aware mode), which is the
     whole reason to prefer BATH over HMMER for degraded elements.
     report_evalue caps the reported hits to keep the tblout small; the real
     TEsorter cutoff (1e-3) is applied later by the classifier's filters.
+
+    z_megabases pins the search space (bathsearch -Z, in megabases) instead of
+    letting BATH derive it from whatever was passed in. This matters whenever
+    the input is a subset: E-value scales with search-space size, so searching
+    30 of 60 sequences yields better E-values for the same alignment, and hits
+    sitting near the 1e-3 cutoff flip purely on how much an upstream stage
+    removed. A staged cascade must therefore pin Z to the full input so every
+    stage's E-values mean the same thing and match a single full-input run.
+    (search.legacy_search_nucl pins nhmmer's Z for the same reason; hmmsearch
+    needs no equivalent, as its Z is a model count, not a target count.)
     """
     cmd = [_bin("bathsearch")]
     if frameshift:
         cmd.append("--fs")
     cmd += ["--cpu", str(max(1, n_workers)),
-            "-E", str(report_evalue),
-            "--tblout", tblout_path,
+            "-E", str(report_evalue)]
+    if z_megabases is not None:
+        cmd += ["-Z", repr(float(z_megabases))]
+    cmd += ["--tblout", tblout_path,
             "-o", os.devnull,
             bath_hmm, nucl_fasta]
     log.info(f"  bathsearch: {' '.join(cmd)}")
