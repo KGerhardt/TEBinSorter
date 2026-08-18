@@ -160,67 +160,24 @@ The practical effect is bounded: dropping the E-value filter altogether raises t
 to 59, so no threshold choice recovers much more. SINE-specific filters are not implemented; use
 `--dna-engine hmmsearch` if you need the old behaviour for comparison.
 
-### Facet mode (`--facet`)
- 
+### Facet pre-screen (`--stages facet`)
+
 Pre-screens amino-acid databases with spliced sub-HMMs ("facets") to route each sequence only to
 the models likely to produce its best hit:
- 
+
 1. **Facet screen**: tiered sub-HMMs (96 → 64 → 48 → 32 aa) searched against all six translated
    frames.
 2. **Targeted verification**: top facet hit per domain family verified with a full-model
    `--nobias` search.
 3. **Cross-family completion**: verified frames searched for missing domain families.
 4. **Legacy fallback**: frames with no facet signal get a full search.
-DNA databases always use the default search (nhmmer); DNA facets do not repay their overhead.
-Incompatible with `--bath` and `--genome`.
- 
-### Staged cascade (`--stages`)
 
-Runs several engines in sequence over each amino-acid database instead of one engine. Each stage
-searches only the sequences earlier stages left unresolved, so a fast engine strips the bulk and
-the slower, more sensitive ones see a shrinking remainder:
+Faster than a plain `hmmer` stage on AA databases, with 99.8% post-filter recall. Available as a
+cascade engine only — `--stages facet` or `--stages facet,bath`. It is mutually exclusive with
+`hmmer`: facet *is* hmmsearch with a pre-screen in front, and step 4 already runs the full search
+on whatever the screen missed.
 
-```bash
-tesorter2 sequences lib.fa --stages nail,hmmer,bath --mask-stops
-```
-
-- **Per database.** Every database runs its own cascade and reaches its own verdict; a sequence
-  resolved by rexdb still runs the full cascade under gydb. Cross-database reconciliation and
-  BLAST pass-2 happen after every search finishes, exactly as in the single-engine path.
-- **Engines:** `hmmer` (pyHMMER hmmsearch), `facet` (hmmsearch with the sub-HMM pre-screen),
-  `bath`, `nail`. `facet` and `hmmer` are mutually exclusive — facet *is* hmmsearch with a
-  pre-screen, and its fallback tier already runs the full search on whatever the screen missed.
-- **Order is configuration.** `--stages bath,hmmer` and `--stages hmmer,bath` are both valid;
-  which is better is an empirical question about your data, so the code does not encode an answer.
-- **DNA databases always use nhmmer**, the only engine that reads DNA profiles. There is no
-  ordering decision there and none is offered.
-- **Provenance** is recorded per hit and per call (`engine`, `stage` columns), plus a
-  `cascade_exits` table giving the stage and reason each sequence left the cascade.
-- A cascade containing `nail` also requires `--mask-stops`: nail cannot read stop codons and masks
-  its own targets regardless, so without global masking its stage would search different sequence
-  than the stages behind it.
-- Incompatible with `--facet` and `--genome`.
-
-Companion files are limited to the RepeatMasker library (`.cls.lib`) under `--stages`. The
-domain-level files encode six-frame coordinates, and a cascade's hits for one database can come
-from several engines with different coordinate systems — the same restriction `--bath` carries.
-
-### Stop-codon masking (`--mask-stops`)
-
-Six-frame translation writes stop codons as `*`, which terminates an alignment. `--mask-stops`
-writes them as `X` (unknown residue) instead, so a profile can align straight through a premature
-stop rather than being cut short by it — recovering domains in degraded, pseudogenized copies.
-
-On a 60-element TIR fixture, pyHMMER classified 15 sequences with stops intact and 17 with stops
-masked; one went from no hit at all to score 20.5 across hmm 59–148.
-
-This covers only the in-frame part of what `--bath` does: masking cannot shift reading frame at an
-indel. Its false-positive cost — aligning through stop-rich non-coding sequence — is not yet
-characterized, which is why it is off by default.
-
-Note that `nail` *requires* this substitution (it rejects `*` outright) and applies it to its own
-targets regardless. Any nail-versus-pyHMMER comparison must therefore set `--mask-stops` on both
-sides, or the difference measured is the substitution rather than the engine.
+DNA databases always use nhmmer; DNA facets do not repay their overhead.
 
 ### BATH mode (`--bath`)
  
@@ -236,7 +193,6 @@ recovered as a single hit with its true extent. No six-frame translation is perf
   minimum-accuracy filter is a no-op for BATH hits.
 - Minus-strand coordinates are normalized to ascending order, with strand encoded in the target
   suffix, matching the HMMER convention.
-- Incompatible with `--facet`.
 - Implied by `--genome`, where BATH is the only protein engine.
 
 ### Genome mode (`--genome`)
@@ -261,7 +217,7 @@ nhmmer element feature (e.g. `SINE_element`) at the same locus coexist as indepe
 than evicting one another.
 
 Window size: `--win-size` (default `1e6`), `--win-ovl` (default `1e5`).
-Requires at least one database; incompatible with `--facet`.
+Requires at least one database.
  
 ### Multiple databases
  
@@ -369,7 +325,6 @@ tesorter2 <sequence> [options]
 | `--dna-engine` | `nhmmer` | Engine for DNA databases (`nhmmer` or `hmmsearch`) |
 | `--prefix` | input basename | Output file prefix |
 | `-p`, `--processors` | `4` | Processors |
-| `--facet` | off | Facet pre-screen mode (AA databases only) |
 | `--bath` | off | Frameshift-aware BATH engine (AA databases only; implied by `--genome`) |
 | `--stages` | off | Staged multi-engine cascade over AA databases, e.g. `nail,hmmer,bath` |
 | `--mask-stops` | off | Translate stop codons as `X` instead of `*`, letting profiles align through premature stops |
@@ -392,7 +347,6 @@ tesorter2 <sequence> [options]
 | `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
 | `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
 | `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
-| `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
 | `{prefix}.dom.fna` | Genome mode: nucleotide sequences of each classified feature |
 | `{prefix}.genome.summary.tsv` | Genome mode: Order/Superfamily/Clade tallies |
@@ -443,7 +397,6 @@ that motivated the decision.
 | `{prefix}.aa` | Six-frame translated amino-acid sequences (indexed; HMMER path only) |
 | `{prefix}.{db}.cls.tsv` | Per-database classifications (order, superfamily, clade, completeness) |
 | `{prefix}.cls.tsv` | Combined classifications across databases + BLAST pass-2 (+ `SecondaryHits`, `SO_name`, `SO_ID`) |
-| `{prefix}.{db}.classifications.tsv` | Facet classifications with confidence tiers (`--facet`) |
 | `{prefix}.dom.gff3` | Genome mode: classified TE protein-domain features |
 | `{prefix}.dom.fna` | Genome mode: nucleotide sequences of each classified feature |
 | `{prefix}.genome.summary.tsv` | Genome mode: Order/Superfamily/Clade tallies |
@@ -468,7 +421,7 @@ tesorter2-compat input.fasta -db rexdb -p 16 -pre out
 Supported: `-db/--hmm-database`, `--db-hmm`, `-st/--seq-type`, `-pre/--prefix`, `-p/--processors`,
 `-tmp/--tmp-dir`, `-cov/--min-coverage`, `-eval/--max-evalue`, `-prob/--min-probability`,
 `-score/--min-score`, `-dp2/--disable-pass2`, `-nolib/--no-library`, `-norc/--no-reverse`,
-`-nocln/--no-cleanup`, plus `--facet`.
+`-nocln/--no-cleanup`.
  
 ---
  

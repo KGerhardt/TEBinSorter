@@ -17,10 +17,7 @@ from .search import build_sequence_block, legacy_search, legacy_search_nucl
 from .sequence import translate_fasta, open_input
 from .results import (create_db, store_sequences, store_legacy, store_facet,
                      index_hits_tables, finalize_db,
-                     FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
                      FACET_STAGE_LEGACY_FALLBACK)
-from .facet_classify import (facet_classify, facet_classify_v2,
-                            export_classifications_tsv)
 from .cross_family import find_missing_families, search_missing, search_missing_v2
 from .classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, reconcile_classifications,
@@ -131,11 +128,6 @@ def parse_args(argv=None):
              "that reads DNA profiles. e.g. --stages nail,hmmer,bath. "
              "facet and hmmer are mutually exclusive; a cascade containing "
              "nail also requires --mask-stops.")
-    seq.add_argument("--facet", action="store_true", default=False,
-                     help="Facet mode: sub-HMM pre-screen -> verify top hit "
-                          "per family -> cross-family completion -> legacy "
-                          "fallback, with facet's own tiered output. DNA "
-                          "databases use the default search.")
     seq.add_argument("--bath", action="store_true", default=False,
                      help="Use BATH (frameshift-aware translated nucleotide "
                           "search) instead of hmmer for amino-acid databases. "
@@ -333,21 +325,10 @@ def main():
 
     genome_mode = args.mode == "genome"
 
-    if not genome_mode:
-        if args.bath and args.facet:
+    if not genome_mode and args.stages:
+        if args.two_pass or args.pass_1_only:
             raise SystemExit(
-                "--bath and --facet are incompatible: facet mode is "
-                "hmmer-only. Run BATH without --facet.")
-        if args.stages:
-            if args.facet:
-                raise SystemExit(
-                    "--stages and --facet are incompatible: --facet is facet's "
-                    "own tiered mode. To use facet as a cascade stage, put it "
-                    "in the stage list: --stages facet,bath")
-            if args.two_pass or args.pass_1_only:
-                raise SystemExit(
-                    "--stages is incompatible with the deprecated two-pass "
-                    "modes.")
+                "--stages is incompatible with the deprecated two-pass modes.")
 
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
@@ -440,9 +421,6 @@ def main():
         nucl_block = build_sequence_block(args.sequence, DNA_ALPHABET)
         log.info(f"  Built nucleotide sequence block: {len(nucl_block)} sequences")
 
-    # Per-DB mode tracks which search path was taken; determines whether the
-    # classification step loads from legacy_hits or facet_hits.
-    db_modes = {}
     per_db_results = {}
 
     # --- Staged cascade (--stages) ---
@@ -515,42 +493,11 @@ def main():
                 path, args.sequence, name,
                 n_workers=args.processors, outdir=outdir)
             store_legacy(conn, hits, name)
-            db_modes[name] = "default"
             log.info(f"  BATH search: {len(hits)} hits in {time.time() - t_b0:.1f}s")
-        elif args.facet and alphabet != DNA_ALPHABET:
-            t_f0 = time.time()
-            classifications, f_verified, f_cross, f_legacy = facet_classify_v2(
-                path, seq_block, seq_fasta, alphabet,
-                n_workers=args.processors,
-                checkpoint_dir=outdir)
-            t_f1 = time.time()
-            n_primary = sum(1 for c in classifications if not c.get("is_secondary"))
-            log.info(f"  Facet mode: {n_primary} assignments, "
-                     f"{len(f_verified)} verified, "
-                     f"{len(f_cross)} cross-family, "
-                     f"{len(f_legacy)} legacy hits in {t_f1 - t_f0:.1f}s")
-            if f_verified:
-                store_facet(conn, f_verified, name, stage=FACET_STAGE_VERIFIED)
-            if f_cross:
-                store_facet(conn, f_cross, name, stage=FACET_STAGE_CROSS_FAMILY)
-            if f_legacy:
-                store_facet(conn, f_legacy, name, stage=FACET_STAGE_LEGACY_FALLBACK)
-            db_modes[name] = "facet"
-            # Export facet-tier classifications (facet-specific TSV)
-            cls_tsv = os.path.join(outdir, f"{prefix}.{name}.classifications.tsv")
-            export_classifications_tsv(classifications, cls_tsv)
-            log.info(f"  Classifications: {cls_tsv}")
-        elif args.facet and alphabet == DNA_ALPHABET:
-            log.info(f"  DNA database: using legacy search (facets AA-only)")
-            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
-                                facet_fallback=True, dna_engine=args.dna_engine,
-                                n_workers=args.processors)
-            db_modes[name] = "facet"
         else:
             run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
                                 dna_engine=args.dna_engine,
                                 n_workers=args.processors)
-            db_modes[name] = "default"
 
     # Build hits-table indexes now that all HMM hits are written and
     # before the classification phase starts reading from them.
@@ -569,19 +516,18 @@ def main():
             log.warning(f"  No classifier config for {name}, skipping")
             continue
 
-        mode = db_modes.get(name, "default")
-        hits_table = "facet_hits" if mode == "facet" else "legacy_hits"
+        hits_table = "legacy_hits"
         hits = load_hits(db_path_out, table=hits_table, database=name)
         if hits is None:
             continue
 
-        log.info(f"  Classifying {name} ({mode} mode, {hits_table})")
+        log.info(f"  Classifying {name} ({hits_table})")
         results = classify_sequences(hits, config,
                                      compat_rounding=args.compat_tesorter_rounding,
                                      compat_voting=args.compat_tesorter_voting)
 
         # Store and export per-database classification (TEsorter format)
-        store_classifications(conn, results, database=name, mode=mode)
+        store_classifications(conn, results, database=name)
         cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
         export_classification_tsv(results, cls_tsv)
         log.info(f"    {len(results)} classified -> {cls_tsv}")
@@ -632,9 +578,7 @@ def main():
         )
 
         if blast_cls:
-            run_mode = "facet" if args.facet else "default"
-            store_classifications(conn, blast_cls, database="blast_pass2",
-                                  mode=run_mode)
+            store_classifications(conn, blast_cls, database="blast_pass2")
             all_results = list(reconciled) + blast_cls
 
     # Export combined classification
