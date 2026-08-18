@@ -41,6 +41,13 @@ The HMM databases (REXdb, GyDB2, LINE, TIR, AnnoSINE) ship inside the package, a
 TEsorter, so there is no download step and no configuration: `tesorter2 input.fasta` works
 straight after install.
 
+> **GyDB2 is shipped modified.** Its 2009-era profiles carried no `COMPO` record, which HMMER and
+> pyHMMER tolerate but stricter HMMER3 readers (notably `nail`) reject outright. The bundled copy
+> adds `COMPO` to all 314 profiles, derived from each model's own match emissions by HMMER's
+> `p7_hmm_SetComposition()` — no probability was altered and no model was rebuilt. Verified to give
+> byte-identical hits and classifications. Full notice, rationale and reproduction steps in
+> [`tesorter2/database/LICENSES.md`](tesorter2/database/LICENSES.md).
+
 To use a custom collection of HMM databases instead, point TEsorter2 at its directory:
 
 ```bash
