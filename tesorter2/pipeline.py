@@ -252,7 +252,8 @@ def parse_args():
 
 
 def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
-                        facet_fallback=False, dna_engine="nhmmer"):
+                        facet_fallback=False, dna_engine="nhmmer",
+                        n_workers=0):
     """
     Exhaustive single-pass nobias search against all models.
 
@@ -282,7 +283,7 @@ def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
     t2 = time.time()
     if use_nhmmer:
         log.info(f"  nhmmer search: bias filter OFF, both strands, all models")
-        hits = legacy_search_nucl(hmms, seq_block)
+        hits = legacy_search_nucl(hmms, seq_block, n_workers=n_workers)
     else:
         log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
         hits = legacy_search(hmms, seq_block, optimized=optimized)
@@ -521,11 +522,13 @@ def main():
         elif args.facet and alphabet == DNA_ALPHABET:
             log.info(f"  DNA database: using legacy search (facets AA-only)")
             run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
-                                facet_fallback=True, dna_engine=args.dna_engine)
+                                facet_fallback=True, dna_engine=args.dna_engine,
+                                n_workers=args.processors)
             db_modes[name] = "facet"
         else:
             run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
-                                dna_engine=args.dna_engine)
+                                dna_engine=args.dna_engine,
+                                n_workers=args.processors)
             db_modes[name] = "default"
 
     # Build hits-table indexes now that all HMM hits are written and

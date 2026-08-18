@@ -244,7 +244,8 @@ class NhmmerEngine(Engine):
         block = build_sequence_block(fasta, DNA_ALPHABET)
         log.info("    nhmmer: %d models over %d sequences",
                  len(hmms), len(block))
-        return legacy_search_nucl(hmms, block, megabases=search_space_mb)
+        return legacy_search_nucl(hmms, block, megabases=search_space_mb,
+                                  n_workers=n_workers)
 
 
 class BathEngine(Engine):
