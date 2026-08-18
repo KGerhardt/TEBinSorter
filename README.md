@@ -161,6 +161,34 @@ the models likely to produce its best hit:
 DNA databases always use the default search (nhmmer); DNA facets do not repay their overhead.
 Incompatible with `--bath` and `--genome`.
  
+### Staged cascade (`--stages`)
+
+Runs several engines in sequence over each amino-acid database instead of one engine. Each stage
+searches only the sequences earlier stages left unresolved, so a fast engine strips the bulk and
+the slower, more sensitive ones see a shrinking remainder:
+
+```bash
+tesorter2 lib.fa --stages nail,pyhmmer,bath --mask-stops
+```
+
+- **Per database.** Every database runs its own cascade and reaches its own verdict; a sequence
+  resolved by rexdb still runs the full cascade under gydb. Cross-database reconciliation and
+  BLAST pass-2 happen after every search finishes, exactly as in the single-engine path.
+- **Order is configuration.** `--stages bath,pyhmmer` and `--stages pyhmmer,bath` are both valid;
+  which is better is an empirical question about your data, so the code does not encode an answer.
+- **DNA databases always use nhmmer**, the only engine that reads DNA profiles. There is no
+  ordering decision there and none is offered.
+- **Provenance** is recorded per hit and per call (`engine`, `stage` columns), plus a
+  `cascade_exits` table giving the stage and reason each sequence left the cascade.
+- A cascade containing `nail` also requires `--mask-stops`: nail cannot read stop codons and masks
+  its own targets regardless, so without global masking its stage would search different sequence
+  than the stages behind it.
+- Incompatible with `--facet` and `--genome`.
+
+Companion files are limited to the RepeatMasker library (`.cls.lib`) under `--stages`. The
+domain-level files encode six-frame coordinates, and a cascade's hits for one database can come
+from several engines with different coordinate systems — the same restriction `--bath` carries.
+
 ### Stop-codon masking (`--mask-stops`)
 
 Six-frame translation writes stop codons as `*`, which terminates an alignment. `--mask-stops`
@@ -327,6 +355,7 @@ tesorter2 <sequence> [options]
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
 | `--bath` | off | Frameshift-aware BATH engine (AA databases only; implied by `--genome`) |
+| `--stages` | off | Staged multi-engine cascade over AA databases, e.g. `nail,pyhmmer,bath` |
 | `--mask-stops` | off | Translate stop codons as `X` instead of `*`, letting profiles align through premature stops |
 | `--genome` | off | Genome mode: domain-level annotation + GFF3 (BATH required) |
 | `--win-size` | `1e6` | Genome mode window size |

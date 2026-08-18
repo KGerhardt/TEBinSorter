@@ -181,6 +181,18 @@ def parse_args():
              "Set BATH_BIN_DIR if bathsearch/bathconvert are not on PATH.",
     )
     parser.add_argument(
+        "--stages",
+        default=None,
+        help="Run the staged search cascade over amino-acid databases instead "
+             "of a single engine: an ordered, comma-separated engine list "
+             "(pyhmmer, bath, nail). Each stage searches only what earlier "
+             "stages left unresolved, per database. DNA databases always use "
+             "nhmmer, the only engine that reads DNA profiles. "
+             "e.g. --stages nail,pyhmmer,bath. Omit for the single-engine "
+             "path. Incompatible with --facet and the deprecated two-pass "
+             "modes; a cascade containing nail also requires --mask-stops.",
+    )
+    parser.add_argument(
         "--mask-stops",
         action="store_true",
         default=False,
@@ -374,6 +386,20 @@ def main():
             "--genome and --facet are incompatible: facet mode is element-level. "
             "Run genome mode without --facet.")
 
+    if args.stages:
+        if args.facet:
+            raise SystemExit(
+                "--stages and --facet are incompatible: facet mode is its own "
+                "staged search. Pick one.")
+        if args.genome:
+            raise SystemExit(
+                "--stages does not apply to --genome: genome mode searches "
+                "protein profiles with BATH and DNA profiles with nhmmer, and "
+                "offers no engine choice.")
+        if args.two_pass or args.pass_1_only:
+            raise SystemExit(
+                "--stages is incompatible with the deprecated two-pass modes.")
+
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
     outdir = args.outdir or f"{input_base}.TEsorter2"
@@ -447,7 +473,7 @@ def main():
     # nucleotide input (frameshift-aware translated search), so no six-frame
     # translation is needed for them.
     aa_block = None
-    if any_amino and not args.bath:
+    if any_amino and not args.bath and not args.stages:
         # Remove stale index if present
         for f in [aa_fasta + ".fxi"]:
             if os.path.exists(f):
@@ -463,7 +489,7 @@ def main():
 
     # Build nucleotide block if needed
     nucl_block = None
-    if any_nucl:
+    if any_nucl and not args.stages:
         log.info("Building nucleotide sequence block")
         nucl_block = build_sequence_block(args.sequence, DNA_ALPHABET)
         log.info(f"  Built nucleotide sequence block: {len(nucl_block)} sequences")
@@ -471,9 +497,58 @@ def main():
     # Per-DB mode tracks which search path was taken; determines whether the
     # classification step loads from legacy_hits or facet_hits.
     db_modes = {}
+    per_db_results = {}
+
+    # --- Staged cascade (--stages) ---
+    # Replaces both the per-database search loop and the classification loop
+    # below; everything after them -- cross-database reconciliation, BLAST
+    # pass-2, the combined export -- is shared and runs unchanged.
+    if args.stages:
+        from . import hierarchical_search
+
+        per_db_results = hierarchical_search.run_cascade(
+            conn, args.sequence, db_paths, db_alphabets, outdir,
+            protein_stages=[x.strip() for x in args.stages.split(",")],
+            n_workers=args.processors,
+            compat_rounding=args.compat_tesorter_rounding,
+            compat_voting=args.compat_tesorter_voting,
+            mask_stops=args.mask_stops)
+
+        log.info("Indexing hits tables")
+        index_hits_tables(conn)
+
+        for name, results in per_db_results.items():
+            if not results:
+                continue
+            cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
+            export_classification_tsv(results, cls_tsv)
+            log.info(f"  {name}: {len(results)} classified -> {cls_tsv}")
+
+            # Companion files: the RepeatMasker library only. The domain-level
+            # files (.dom.gff3/.dom.tsv/.dom.faa, .cls.pep) encode coordinates
+            # on the six-frame translation, and a cascade's hits for one
+            # database can come from several engines -- BATH reports nucleotide
+            # coordinates, nail its own -- so there is no single frame to write
+            # them against. Same restriction --bath already carries.
+            if not args.no_tesorter_outputs:
+                from .tesorter_output import generate_all_outputs
+                generate_all_outputs(
+                    conn, os.path.join(outdir, f"{prefix}.{name}"), name,
+                    args.sequence, None, nucl_lengths, results,
+                    seq_type="nucl",
+                    no_reverse=args.no_reverse,
+                    no_library=args.no_library,
+                    hits_table="legacy_hits",
+                    domain_files=False,
+                    keep=None,
+                )
+
+    # Databases handled by the single-engine path. Empty under --stages, which
+    # has already classified everything through the cascade above.
+    single_engine_dbs = [] if args.stages else db_names
 
     # Run each database
-    for name in db_names:
+    for name in single_engine_dbs:
         path = db_paths[name]
         alphabet = db_alphabets[name]
 
@@ -541,9 +616,8 @@ def main():
     # --- Classification ---
     log.info("--- Classification ---")
     from .deconflict import load_hits
-    per_db_results = {}
 
-    for name in db_names:
+    for name in single_engine_dbs:
         config = DB_CONFIGS.get(name)
         if config is None:
             log.warning(f"  No classifier config for {name}, skipping")
