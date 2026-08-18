@@ -23,7 +23,7 @@ call suppress another's search and silently starve the vote. The cost is
 redundant work on sequences some database already resolved, which is accepted.
 
 **Engine order is data, not code.** Stages are a list; swapping the order or
-inserting an engine is a configuration change (`--stages bath,pyhmmer`). Which
+inserting an engine is a configuration change (`--stages bath,hmmer`). Which
 order is best is an empirical question about relative speed and recall, so the
 code deliberately does not encode an answer.
 
@@ -210,11 +210,16 @@ class _HmmCache:
 _CACHE = _HmmCache()
 
 
-class PyhmmerEngine(Engine):
+class HmmerEngine(Engine):
     """pyHMMER hmmsearch over six-frame translations. The replication
-    baseline: this is the path whose output matches TEsorter."""
+    baseline: this is the path whose output matches TEsorter.
 
-    name = "pyhmmer"
+    Named "hmmer" on the command line -- it is HMMER's hmmsearch, run
+    in-process through pyHMMER rather than as a subprocess, and the
+    distinction is an implementation detail from a user's side.
+    """
+
+    name = "hmmer"
     input_kind = "aa"
     db_kinds = ("aa",)
 
@@ -277,6 +282,41 @@ class BathEngine(Engine):
         return bath_search.parse_bath_tblout(tblout)
 
 
+class FacetEngine(Engine):
+    """hmmsearch with a sub-HMM pre-screen: spliced "facets" route each frame
+    to the models likely to produce its best hit, then the top hit per domain
+    family is verified with a full-model search, missing families are completed,
+    and frames with no facet signal fall back to a full search.
+
+    Mutually exclusive with the hmmer stage -- facet *is* hmmsearch with a
+    pre-screen in front, and its own legacy-fallback tier already runs the full
+    search on anything the screen missed, so pairing the two in one cascade
+    repeats that work rather than adding sensitivity.
+
+    The cascade uses facet's hits and classifies them with the same
+    classify_sequences every other stage uses, rather than facet's own tiered
+    classifications; that keeps one classification path across all stages. Run
+    --facet on its own for the tiered output with its confidence tiers.
+    """
+
+    name = "facet"
+    input_kind = "aa"
+    db_kinds = ("aa",)
+
+    def search(self, db_path, fasta, db_name, workdir, n_workers,
+               search_space_mb=None):
+        # search_space_mb is unused for the same reason as the hmmer stage.
+        from .facet_classify import facet_classify_v2
+        block = build_sequence_block(fasta, AMINO_ALPHABET)
+        log.info("    facet: pre-screen over %d frames", len(block))
+        _cls, verified, cross, fallback = facet_classify_v2(
+            db_path, block, fasta, AMINO_ALPHABET,
+            n_workers=n_workers, checkpoint_dir=workdir)
+        log.info("    facet: %d verified + %d cross-family + %d fallback",
+                 len(verified), len(cross), len(fallback))
+        return list(verified) + list(cross) + list(fallback)
+
+
 class NailEngine(Engine):
     """nail: MMseqs2-seeded sparse approximation of HMMER's Forward/Backward.
 
@@ -309,11 +349,16 @@ class NailEngine(Engine):
 
 
 ENGINES = {
-    "pyhmmer": PyhmmerEngine,
+    "hmmer": HmmerEngine,
+    "facet": FacetEngine,
     "nhmmer": NhmmerEngine,
     "bath": BathEngine,
     "nail": NailEngine,
 }
+
+# "pyhmmer" was the engine's name before the CLI settled on "hmmer"; accepted
+# so existing --stages strings keep working.
+_ENGINE_ALIASES = {"pyhmmer": "hmmer"}
 
 # Applied to DNA databases regardless of the protein cascade: nhmmer is the
 # only engine that can read a DNA profile, so there is nothing to stage.
@@ -335,11 +380,18 @@ def build_stages(names, mask_stops=False):
     """
     stages = []
     for n in names:
-        n = n.strip()
+        n = _ENGINE_ALIASES.get(n.strip(), n.strip())
         if n not in ENGINES:
             raise ValueError("Unknown engine %r; known engines: %s"
                              % (n, ", ".join(sorted(ENGINES))))
         stages.append(ENGINES[n]())
+
+    picked = {s.name for s in stages}
+    if {"facet", "hmmer"} <= picked:
+        raise SystemExit(
+            "--stages cannot contain both facet and hmmer: facet is hmmsearch "
+            "with a pre-screen in front, and its fallback tier already runs the "
+            "full search on whatever the screen missed. Pick one.")
 
     if not mask_stops and any(s.name == "nail" for s in stages) \
             and any(s.input_kind == "aa" and s.name != "nail" for s in stages):
@@ -509,7 +561,7 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
 
 
 def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
-                protein_stages=("pyhmmer", "bath"), n_workers=4,
+                protein_stages=("hmmer", "bath"), n_workers=4,
                 reject_floors=None, compat_rounding=False,
                 compat_voting=False, aa_fasta=None, mask_stops=False):
     """Run the cascade for every database. Returns {db_name: [results]}.
@@ -600,11 +652,11 @@ def main(argv=None):
                    help="Output directory [default: {input}.TEsorter2]")
     p.add_argument("--prefix", default=None, help="Output file prefix")
     p.add_argument("--db-dir", default=None, help="HMM database directory")
-    p.add_argument("--stages", default="pyhmmer,bath",
+    p.add_argument("--stages", default="hmmer,bath",
                    help="Ordered protein-engine cascade, comma separated "
                         "(known: %s). DNA databases always use nhmmer, the "
                         "only engine that reads DNA profiles. "
-                        "[default: pyhmmer,bath]"
+                        "[default: hmmer,bath]"
                         % ", ".join(sorted(ENGINES)))
     p.add_argument("-p", "--processors", type=int, default=4)
     p.add_argument(

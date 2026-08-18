@@ -38,7 +38,7 @@ pip install git+https://github.com/KGerhardt/TEsorter2.git
 ### Databases
 
 The HMM databases (REXdb, GyDB2, LINE, TIR, AnnoSINE) ship inside the package, as they do in
-TEsorter, so there is no download step and no configuration: `tesorter2 input.fasta` works
+TEsorter, so there is no download step and no configuration: `tesorter2 sequences input.fasta` works
 straight after install.
 
 > **GyDB2 is shipped modified.** Its 2009-era profiles carried no `COMPO` record, which HMMER and
@@ -51,7 +51,7 @@ straight after install.
 To use a custom collection of HMM databases instead, point TEsorter2 at its directory:
 
 ```bash
-tesorter2 input.fasta --db-dir /path/to/db     # or: export TESORTER2_DB=/path/to/db
+tesorter2 sequences input.fasta --db-dir /path/to/db   # or: export TESORTER2_DB=/path/to/db
 ```
 
 Individual databases can also be passed by path: `-d /path/to/custom.hmm`.
@@ -88,6 +88,19 @@ cargo install nail        # needs MMseqs2 on PATH; nail shells out to it for see
 It reads HMMER3 `.hmm` files directly, so there is no conversion step. Amino-acid only: it cannot
 search DNA profile databases and has no role in genome mode. Verified against nail 0.7.1 with
 MMseqs2 18.8cc5c.
+
+## Two modes
+
+The mode is a verb, because what the input *is* decides nearly everything downstream — which
+engines can run, whether the input is windowed, whether there is a per-element classification at
+all:
+
+```bash
+tesorter2 sequences lib.fa      # pre-extracted TE sequences -> per-element classifications
+tesorter2 genome    asm.fa      # whole assembly -> domain-level GFF3 + summary
+```
+
+The older flag form (`tesorter2 lib.fa`, `tesorter2 asm.fa --genome`) still works and warns.
 
 ## Choosing an engine
  
@@ -168,13 +181,16 @@ searches only the sequences earlier stages left unresolved, so a fast engine str
 the slower, more sensitive ones see a shrinking remainder:
 
 ```bash
-tesorter2 lib.fa --stages nail,pyhmmer,bath --mask-stops
+tesorter2 sequences lib.fa --stages nail,hmmer,bath --mask-stops
 ```
 
 - **Per database.** Every database runs its own cascade and reaches its own verdict; a sequence
   resolved by rexdb still runs the full cascade under gydb. Cross-database reconciliation and
   BLAST pass-2 happen after every search finishes, exactly as in the single-engine path.
-- **Order is configuration.** `--stages bath,pyhmmer` and `--stages pyhmmer,bath` are both valid;
+- **Engines:** `hmmer` (pyHMMER hmmsearch), `facet` (hmmsearch with the sub-HMM pre-screen),
+  `bath`, `nail`. `facet` and `hmmer` are mutually exclusive — facet *is* hmmsearch with a
+  pre-screen, and its fallback tier already runs the full search on whatever the screen missed.
+- **Order is configuration.** `--stages bath,hmmer` and `--stages hmmer,bath` are both valid;
   which is better is an empirical question about your data, so the code does not encode an answer.
 - **DNA databases always use nhmmer**, the only engine that reads DNA profiles. There is no
   ordering decision there and none is offered.
@@ -355,7 +371,7 @@ tesorter2 <sequence> [options]
 | `-p`, `--processors` | `4` | Processors |
 | `--facet` | off | Facet pre-screen mode (AA databases only) |
 | `--bath` | off | Frameshift-aware BATH engine (AA databases only; implied by `--genome`) |
-| `--stages` | off | Staged multi-engine cascade over AA databases, e.g. `nail,pyhmmer,bath` |
+| `--stages` | off | Staged multi-engine cascade over AA databases, e.g. `nail,hmmer,bath` |
 | `--mask-stops` | off | Translate stop codons as `X` instead of `*`, letting profiles align through premature stops |
 | `--genome` | off | Genome mode: domain-level annotation + GFF3 (BATH required) |
 | `--win-size` | `1e6` | Genome mode window size |

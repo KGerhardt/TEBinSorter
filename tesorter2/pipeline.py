@@ -8,6 +8,7 @@ Orchestrates: FASTA ingestion -> alphabet detection -> optional translation
 import argparse
 import logging
 import os
+import sys
 import time
 
 from .paths import get_db_dir
@@ -25,6 +26,7 @@ from .classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, reconcile_classifications,
                        DB_CONFIGS)
 from .blast_pass2 import blast_pass2
+from .hierarchical_search import ENGINES
 from . import bath_search
 
 
@@ -62,205 +64,158 @@ def resolve_db(name, db_dir=None):
     raise FileNotFoundError(f"Database '{name}' not found (not a file or known alias)")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        prog="tesorter2",
-        description="Fast TE classification using HMM profile databases. "
-                    "Default mode produces results identical to TEsorter.",
-    )
-    parser.add_argument(
-        "sequence",
-        help="Input TE/LTR sequences in FASTA format",
-    )
-    parser.add_argument(
-        "-d", "--database",
-        default=None,
+# Subcommands. The mode is the verb: what the input *is* decides almost
+# everything downstream -- which engines can run, whether the input is
+# windowed, whether there is a per-element classification at all -- so it reads
+# better as a mode than as a flag hung off a single command.
+MODES = ("sequences", "genome")
+
+
+def _add_shared(p):
+    """Options meaningful in both modes."""
+    p.add_argument("sequence", help="Input FASTA")
+    p.add_argument(
+        "-d", "--database", default=None,
         help="Comma-separated list of database names or paths "
              f"(aliases: {', '.join(DB_ALIASES.keys())}). "
-             "[default: every bundled database except sine-so]",
-    )
-    parser.add_argument(
-        "--max-search",
-        action="store_true",
-        default=False,
-        help="Search against all known databases. This is now the default "
-             "when -d is omitted; the flag is kept so it still forces the "
-             "full set even alongside an explicit -d.",
-    )
-    parser.add_argument(
-        "--genome",
-        action="store_true",
-        default=False,
-        help="Genome mode: input is genome sequence(s). Windows the genome, "
-             "detects TE protein domains throughout, classifies each domain "
-             "individually, and emits a feature-level GFF3 + summary table "
-             "(no per-element .cls.tsv, no BLAST pass-2). Protein domains are "
-             "found with BATH, which is required for this mode; DNA databases "
-             "(e.g. sine) are searched with nhmmer to find non-coding elements "
-             "too.",
-    )
-    parser.add_argument(
-        "--win-size",
-        type=float,
-        default=1e6,
-        help="Genome mode: window size for chunking [default: 1e6]",
-    )
-    parser.add_argument(
-        "--win-ovl",
-        type=float,
-        default=1e5,
-        help="Genome mode: window overlap [default: 1e5]",
-    )
-    parser.add_argument(
-        "--facet",
-        action="store_true",
-        default=False,
-        help="Facet mode: sub-HMM pre-screen -> verify top hit per family "
-             "-> cross-family completion -> legacy fallback. Faster on AA "
-             "databases with 99.8%% post-filter recall. DNA databases "
-             "automatically use default mode.",
-    )
-    # Deprecated modes -- retained for backward compatibility, hidden from help
-    parser.add_argument("--quick", action="store_true", default=False,
-                        help=argparse.SUPPRESS)
-    parser.add_argument("--iterative", action="store_true", default=False,
-                        help=argparse.SUPPRESS)
-    parser.add_argument("--two-pass", action="store_true", default=False,
-                        help=argparse.SUPPRESS)
-    parser.add_argument("--pass-1-only", action="store_true", default=False,
-                        help=argparse.SUPPRESS)
-    parser.add_argument(
-        "-o", "--outdir",
-        default=None,
-        help="Output directory [default: {input}.TEsorter2]",
-    )
-    parser.add_argument(
-        "--db-dir",
-        default=None,
-        help="Directory containing the HMM databases "
-             "[default: the databases bundled with the package]",
-    )
-    parser.add_argument(
-        "--dna-engine",
-        choices=("nhmmer", "hmmsearch"),
-        default="nhmmer",
-        help="Engine for DNA databases. nhmmer scans both strands and handles "
-             "long targets; hmmsearch only scores the strand it is given and "
-             "is limited to 100k-residue sequences. [default: nhmmer]",
-    )
-    parser.add_argument(
-        "--prefix",
-        default=None,
-        help="Output file prefix [default: basename of input]",
-    )
-    parser.add_argument(
-        "-p", "--processors",
-        type=int,
-        default=4,
-        help="Processors to use [default: 4]",
-    )
-    parser.add_argument("--F1", type=float, default=0.02,
-                        help=argparse.SUPPRESS)  # deprecated, two-pass only
-    parser.add_argument(
-        "--emit-bath",
-        action="store_true",
-        default=False,
-        help="Emit routed FASTA partitions for the BATH aligner. "
-             "Output goes to {outdir}/BATHwater/ directory.",
-    )
-    parser.add_argument(
-        "--bath",
-        action="store_true",
-        default=False,
-        help="Use the BATH aligner (frameshift-aware translated nucleotide "
-             "search) instead of pyhmmer/HMMER for amino-acid databases. "
-             "Runs bathsearch --fs on the raw nucleotide input (no six-frame "
-             "translation). BATH covers protein profiles only, so DNA "
-             "databases (AnnoSINE) still go through nhmmer. Implied by "
-             "--genome, which has no other protein engine. "
-             "Set BATH_BIN_DIR if bathsearch/bathconvert are not on PATH.",
-    )
-    parser.add_argument(
-        "--stages",
-        default=None,
+             "[default: every bundled database except sine-so]")
+    p.add_argument("--max-search", action="store_true", default=False,
+                   help="Search against all known databases. This is the "
+                        "default when -d is omitted; the flag still forces the "
+                        "full set alongside an explicit -d.")
+    p.add_argument("-o", "--outdir", default=None,
+                   help="Output directory [default: {input}.TEsorter2]")
+    p.add_argument("--prefix", default=None,
+                   help="Output file prefix [default: basename of input]")
+    p.add_argument("--db-dir", default=None,
+                   help="Directory containing the HMM databases "
+                        "[default: the databases bundled with the package]")
+    p.add_argument("-p", "--processors", type=int, default=4,
+                   help="Processors to use [default: 4]")
+    p.add_argument("--include-sine-so", action="store_true", default=False,
+                   help="Include the SINE_SO model (M=4176) in AnnoSINE "
+                        "searches. Excluded by default: it costs 71%% of "
+                        "AnnoSINE's compute for <1 filterable hit per 100k "
+                        "sequences.")
+    p.add_argument("--mask-stops", action="store_true", default=False,
+                   help="Six-frame translate stop codons as 'X' (unknown "
+                        "residue) rather than '*' (terminator), letting a "
+                        "profile align through a premature stop instead of "
+                        "being cut short by it. Recovers domains in degraded "
+                        "copies, but covers only the in-frame part of what "
+                        "BATH does and its false-positive cost is not yet "
+                        "characterized.")
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="tesorter2",
+        description="Fast TE classification using HMM profile databases.")
+    sub = parser.add_subparsers(dest="mode", metavar="{sequences,genome}")
+
+    # ---- tesorter2 sequences ----
+    seq = sub.add_parser(
+        "sequences", help="Classify pre-extracted TE sequences",
+        description="Classify pre-extracted TE/LTR sequences. Emits a "
+                    "per-element classification per database, a reconciled "
+                    "combined call, and a BLAST pass-2 over whatever no "
+                    "database classified.")
+    _add_shared(seq)
+    seq.add_argument(
+        "--stages", default=None,
         help="Run the staged search cascade over amino-acid databases instead "
              "of a single engine: an ordered, comma-separated engine list "
-             "(pyhmmer, bath, nail). Each stage searches only what earlier "
-             "stages left unresolved, per database. DNA databases always use "
-             "nhmmer, the only engine that reads DNA profiles. "
-             "e.g. --stages nail,pyhmmer,bath. Omit for the single-engine "
-             "path. Incompatible with --facet and the deprecated two-pass "
-             "modes; a cascade containing nail also requires --mask-stops.",
-    )
-    parser.add_argument(
-        "--mask-stops",
-        action="store_true",
-        default=False,
-        help="Six-frame translate stop codons as 'X' (unknown residue) rather "
-             "than '*' (terminator), letting a profile align through a "
-             "premature stop instead of being cut short by it. Recovers "
-             "domains in degraded copies -- 15 -> 17 classified on a 60-element "
-             "TIR fixture -- but covers only the in-frame part of what --bath "
-             "does, and its false-positive cost is not yet characterized. "
-             "Off by default; affects the translated (amino-acid) path only.",
-    )
-    parser.add_argument(
-        "--compat-tesorter-voting",
-        action="store_true",
-        default=False,
-        help="Decide the clade by raw domain-count plurality, replicating "
-             "TEsorter exactly. Default is a score-weighted clade vote (summed "
-             "normalized domain score), which resolves sibling-clade swaps that "
-             "TEsorter breaks arbitrarily on tied vote counts.",
-    )
-    parser.add_argument(
-        "--include-sine-so",
-        action="store_true",
-        default=False,
-        help="Include the SINE_SO model (M=4176) in AnnoSINE searches. "
-             "Excluded by default: SINE_SO costs 71%% of AnnoSINE's compute "
-             "but produces <1 filterable hit per 100k sequences.",
-    )
-    parser.add_argument(
-        "--compat-tesorter-rounding",
-        action="store_true",
-        default=False,
-        help="Round normalized scores to 2 decimal places before threshold "
-             "comparison, replicating a TEsorter rounding bug. Use only for "
-             "exact result reproduction against old TEsorter output.",
-    )
-    parser.add_argument(
-        "--compat-tesorter-output",
-        action="store_true",
-        default=False,
-        help="Emit the combined .cls.tsv in TEsorter's 7-column format. "
-             "Default emits an 8th SecondaryHits column listing all "
-             "per-database classifications and their summed normalized "
-             "scores in descending order of evidence strength.",
-    )
-    parser.add_argument(
-        "--no-tesorter-outputs",
-        action="store_true",
-        default=False,
-        help="Skip the TEsorter-compatible companion files (.cls.lib, "
-             ".cls.pep, .dom.gff3, .dom.tsv, .dom.faa), which are written "
-             "alongside each per-database .cls.tsv by default. Writing them "
-             "costs extra I/O and holds the input FASTA in memory.",
-    )
-    parser.add_argument(
-        "-nolib", "--no-library",
-        action="store_true",
-        default=False,
-        help="Do not write the RepeatMasker library (.cls.lib).",
-    )
-    parser.add_argument(
-        "-norc", "--no-reverse",
-        action="store_true",
-        default=False,
-        help="Do not reverse-complement minus-strand sequences when writing "
-             "the .cls.lib library.",
-    )
-    return parser.parse_args()
+             f"({', '.join(sorted(k for k in ENGINES if k != 'nhmmer'))}). "
+             "Each stage searches only what earlier stages left unresolved, "
+             "per database. DNA databases always use nhmmer, the only engine "
+             "that reads DNA profiles. e.g. --stages nail,hmmer,bath. "
+             "facet and hmmer are mutually exclusive; a cascade containing "
+             "nail also requires --mask-stops.")
+    seq.add_argument("--facet", action="store_true", default=False,
+                     help="Facet mode: sub-HMM pre-screen -> verify top hit "
+                          "per family -> cross-family completion -> legacy "
+                          "fallback, with facet's own tiered output. DNA "
+                          "databases use the default search.")
+    seq.add_argument("--bath", action="store_true", default=False,
+                     help="Use BATH (frameshift-aware translated nucleotide "
+                          "search) instead of hmmer for amino-acid databases. "
+                          "Set BATH_BIN_DIR if bathsearch/bathconvert are not "
+                          "on PATH.")
+    seq.add_argument("--dna-engine", choices=("nhmmer", "hmmsearch"),
+                     default="nhmmer",
+                     help="Engine for DNA databases. nhmmer scans both strands "
+                          "and handles long targets; hmmsearch scores only the "
+                          "strand it is given. [default: nhmmer]")
+    seq.add_argument("--compat-tesorter-voting", action="store_true",
+                     default=False,
+                     help="Decide the clade by raw domain-count plurality, "
+                          "replicating TEsorter exactly. Default is a "
+                          "score-weighted clade vote.")
+    seq.add_argument("--compat-tesorter-rounding", action="store_true",
+                     default=False,
+                     help="Round normalized scores to 2 dp before threshold "
+                          "comparison, replicating a TEsorter rounding bug.")
+    seq.add_argument("--compat-tesorter-output", action="store_true",
+                     default=False,
+                     help="Emit the combined .cls.tsv in TEsorter's 7-column "
+                          "format, without SecondaryHits/SO/lineage.")
+    seq.add_argument("--no-tesorter-outputs", action="store_true",
+                     default=False,
+                     help="Skip the TEsorter-compatible companion files "
+                          "(.cls.lib, .cls.pep, .dom.gff3, .dom.tsv, .dom.faa).")
+    seq.add_argument("-nolib", "--no-library", action="store_true",
+                     default=False,
+                     help="Do not write the RepeatMasker library (.cls.lib).")
+    seq.add_argument("-norc", "--no-reverse", action="store_true",
+                     default=False,
+                     help="Do not reverse-complement minus-strand sequences "
+                          "when writing the .cls.lib library.")
+    seq.add_argument("--emit-bath", action="store_true", default=False,
+                     help="Emit routed FASTA partitions for BATH to "
+                          "{outdir}/BATHwater/.")
+    # Deprecated, hidden
+    for dep in ("--quick", "--iterative", "--two-pass", "--pass-1-only"):
+        seq.add_argument(dep, action="store_true", default=False,
+                         help=argparse.SUPPRESS)
+    seq.add_argument("--F1", type=float, default=0.02, help=argparse.SUPPRESS)
+
+    # ---- tesorter2 genome ----
+    gen = sub.add_parser(
+        "genome", help="Annotate TE domains across a whole assembly",
+        description="Scan whole-genome sequence for TE domains. Windows the "
+                    "genome, classifies each domain occurrence individually, "
+                    "and emits a feature-level GFF3 + summary. No per-element "
+                    "classification and no BLAST pass-2. Protein profiles are "
+                    "searched with BATH (required); DNA profiles with stock "
+                    "HMMER nhmmer.")
+    _add_shared(gen)
+    gen.add_argument("--win-size", type=float, default=1e6,
+                     help="Window size for chunking [default: 1e6]")
+    gen.add_argument("--win-ovl", type=float, default=1e5,
+                     help="Window overlap [default: 1e5]")
+
+    args = parser.parse_args(_normalize_argv(argv))
+    if args.mode is None:
+        parser.error("a mode is required: %s" % " | ".join(MODES))
+    return args
+
+
+def _normalize_argv(argv):
+    """Accept the pre-subcommand form, so existing scripts keep working.
+
+    `tesorter2 in.fa --genome ...` becomes `tesorter2 genome in.fa ...`, and a
+    bare `tesorter2 in.fa ...` becomes `tesorter2 sequences in.fa ...`.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in MODES or argv[0] in ("-h", "--help"):
+        return argv
+    if argv[0].startswith("-"):
+        return argv                      # let argparse report it
+    if "--genome" in argv:
+        log.warning("`--genome` is deprecated; use `tesorter2 genome ...`")
+        return ["genome"] + [a for a in argv if a != "--genome"]
+    log.warning("Assuming `tesorter2 sequences ...`; name the mode explicitly.")
+    return ["sequences"] + argv
 
 
 def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
@@ -376,29 +331,23 @@ def run_database(db_path, seq_block, seq_fasta, db_name, alphabet, conn,
 def main():
     args = parse_args()
 
-    if args.bath and args.facet:
-        raise SystemExit(
-            "--bath and --facet are incompatible: facet mode is pyhmmer-only. "
-            "Run BATH without --facet.")
+    genome_mode = args.mode == "genome"
 
-    if args.genome and args.facet:
-        raise SystemExit(
-            "--genome and --facet are incompatible: facet mode is element-level. "
-            "Run genome mode without --facet.")
-
-    if args.stages:
-        if args.facet:
+    if not genome_mode:
+        if args.bath and args.facet:
             raise SystemExit(
-                "--stages and --facet are incompatible: facet mode is its own "
-                "staged search. Pick one.")
-        if args.genome:
-            raise SystemExit(
-                "--stages does not apply to --genome: genome mode searches "
-                "protein profiles with BATH and DNA profiles with nhmmer, and "
-                "offers no engine choice.")
-        if args.two_pass or args.pass_1_only:
-            raise SystemExit(
-                "--stages is incompatible with the deprecated two-pass modes.")
+                "--bath and --facet are incompatible: facet mode is "
+                "hmmer-only. Run BATH without --facet.")
+        if args.stages:
+            if args.facet:
+                raise SystemExit(
+                    "--stages and --facet are incompatible: --facet is facet's "
+                    "own tiered mode. To use facet as a cascade stage, put it "
+                    "in the stage list: --stages facet,bath")
+            if args.two_pass or args.pass_1_only:
+                raise SystemExit(
+                    "--stages is incompatible with the deprecated two-pass "
+                    "modes.")
 
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
@@ -445,13 +394,10 @@ def main():
     # Genome mode: dispatch to the domain-level genome scanner and stop here.
     # It windows the genome, finds/classifies each TE protein domain, and emits
     # a GFF3 + summary -- no element classification, reconcile, or BLAST pass-2.
-    if args.genome:
+    if genome_mode:
         from . import genome
 
         log.info("Genome mode")
-        if args.bath:
-            log.info("  --bath is implied in genome mode (BATH is the only "
-                     "protein engine there); the flag has no effect.")
         genome.run_genome(
             args.sequence, db_paths, db_alphabets, outdir, prefix,
             n_workers=args.processors,

@@ -42,7 +42,7 @@ pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1"; status=1; }
 
 echo "########## 1. mixed genome: rexdb + sine ##########"
-"$PY" -m tesorter2.pipeline "$GENOME" --genome -d rexdb,sine -p 8 \
+"$PY" -m tesorter2.pipeline genome "$GENOME" -d rexdb,sine -p 8 \
     --db-dir "$DBDIR" -o gsine_mixed --prefix g >/dev/null 2>&1
 G=gsine_mixed/g.dom.gff3
 
@@ -87,7 +87,7 @@ grep -qE "^SINE\b" gsine_mixed/g.genome.summary.tsv && pass "summary has SINE ro
 
 echo
 echo "########## 2. sine-only genome: nucleotide single-kind ##########"
-"$PY" -m tesorter2.pipeline "$GENOME" --genome -d sine -p 8 \
+"$PY" -m tesorter2.pipeline genome "$GENOME" -d sine -p 8 \
     --db-dir "$DBDIR" -o gsine_sine --prefix s >/dev/null 2>&1
 if [ -s gsine_sine/s.dom.fna ] && [ ! -e gsine_sine/s.dom.faa ]; then
     pass "sine-only emits .fna only (no .faa)"
@@ -103,7 +103,7 @@ only_sine=$(awk -F'\t' '$3!="" && $3!="SINE_element" && $0 !~ /^#/' gsine_sine/s
 
 echo
 echo "########## 3. rexdb-only genome: AA single-kind (no regression) ##########"
-"$PY" -m tesorter2.pipeline "$GENOME" --genome -d rexdb -p 8 \
+"$PY" -m tesorter2.pipeline genome "$GENOME" -d rexdb -p 8 \
     --db-dir "$DBDIR" -o gsine_rexdb --prefix r >/dev/null 2>&1
 # BATH reports nucleotide coordinates against the windows, so even a
 # protein-only genome run emits nucleotide sub-sequences.
