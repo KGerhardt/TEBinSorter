@@ -24,13 +24,19 @@ BATH is consequently a hard requirement for genome mode -- see bath_search.
 require_binaries, called before any windowing so a missing binary fails fast.
 
 DNA-alphabet databases (e.g. AnnoSINE) are searched with a second engine:
-  * nhmmer: DNA-DNA search directly on the nucleotide windows, both strands in
-    one pass (search.legacy_search_nucl). SINEs are non-coding / non-autonomous,
-    so they carry no protein domain and are invisible to the two engines above.
-    nhmmer hits already carry nucleotide ali coords + the |fwd1/|rev1 suffix
-    (search._normalize_nucl_hit), so they flow through the BATH coordinate path.
-    A run may mix engines (e.g. rexdb via HMMER + sine via nhmmer); each feature
-    records whether its sub-sequence is amino-acid (.faa) or nucleotide (.fna).
+  * nhmmer, shelled out to stock HMMER (nhmmer_search), not pyHMMER. SINEs are
+    non-coding and carry no protein domain, so BATH cannot see them at all --
+    bathconvert rejects a DNA profile outright ("Expect Amino Acid"). At genome
+    scale the reference nhmmer is what the models were calibrated against and
+    what published results compare to, and process startup is negligible against
+    a whole assembly; short-sequence mode keeps the in-process pyHMMER path,
+    where that tradeoff reverses.
+    The genome is NOT windowed for this path: nhmmer handles long targets, so it
+    reads the raw input and its hits already carry genomic coordinates plus the
+    |fwd1/|rev1 strand suffix the rest of the pipeline expects. That also keeps
+    the DNA annotation independent of the protein path's window sizing.
+    A run may mix engines (rexdb via BATH + sine via nhmmer); both report
+    nucleotide coordinates, so every feature's sub-sequence is nucleotide.
 """
 
 import itertools
@@ -40,14 +46,13 @@ import re
 import sys
 import time
 
-from .hmm import load_hmms, AMINO_ALPHABET, DNA_ALPHABET
+from .hmm import AMINO_ALPHABET, DNA_ALPHABET
 from .sequence import (open_input, clean_seq, revcomp,
                       parse_frame_suffix, load_sequences_dict)
-from .search import build_sequence_block, legacy_search_nucl
 from .so_map import so_gff_type
 from .classifier import (parse_clade_rexdb, parse_clade_gydb, classify_element,
                         load_gydb_clade_map, DB_CONFIGS)
-from . import bath_search
+from . import bath_search, nhmmer_search
 
 
 log = logging.getLogger(__name__)
@@ -406,18 +411,26 @@ def _search_bath(cut_fa, db_path, db_name, n_workers, outdir):
         db_path, cut_fa, db_name, n_workers=n_workers, outdir=outdir)
 
 
-def _search_nhmmer(db_path, nucl_block):
+def _search_nhmmer(db_path, db_name, input_fasta, outdir, n_workers):
     """DNA-DNA search of a nucleotide model set against the RAW input genome,
-    both strands in one pass (search.legacy_search_nucl). nhmmer handles long
-    targets, so the input is searched un-windowed: the target is the whole
-    chromosome and hits carry genomic ali coords + a |fwd1/|rev1 strand suffix.
-    The caller builds nucl_block from the input once and shares it across DNA
-    dbs. Searching the raw input rather than cut.fa keeps the DNA-element
-    annotation independent of the protein path's window sizing."""
-    hmms = load_hmms(db_path)
-    log.info("  Searching {} DNA models (nhmmer, both strands, raw input)".format(
-        len(hmms)))
-    hits = legacy_search_nucl(hmms, nucl_block)
+    both strands in one pass, via stock HMMER's nhmmer binary.
+
+    Genome mode shells out rather than using pyHMMER here. At genome scale the
+    reference implementation is what the models were calibrated against and
+    what published results are comparable to; pyHMMER's LongTargetsPipeline is
+    a reimplementation whose E-value scaling already needed a workaround
+    (search.legacy_search_nucl pins Z=1 and rescales by hand because pyHMMER
+    applies Z twice). Process startup is irrelevant against a genome, so the
+    tradeoff that favours in-process search for short sequences reverses here.
+
+    The input is searched un-windowed: nhmmer handles long targets, so the
+    target is the whole chromosome and hits carry genomic coordinates plus a
+    |fwd1/|rev1 strand suffix. Searching the raw input rather than cut.fa keeps
+    the DNA-element annotation independent of the protein path's windowing."""
+    log.info("  Searching DNA models (stock nhmmer, both strands, raw input)")
+    hits = nhmmer_search.run_and_parse(
+        db_path, input_fasta, db_name,
+        os.path.join(outdir, "nhmmer"), n_workers=n_workers)
     log.info("  {} raw nucleotide hits".format(len(hits)))
     return hits
 
@@ -463,14 +476,10 @@ def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
                                  win_ovl=win_ovl)
         log.info("  {} windows".format(len(cut_lengths)))
 
-    # nhmmer scans the RAW input genome directly (un-windowed; it handles long
-    # targets). Build the block once from the input and reuse it across every DNA
-    # database, which keeps the DNA-element annotation independent of the window
-    # sizing used for the protein path.
-    nucl_block = None
+    # stock nhmmer reads the input FASTA itself, so no in-memory block is
+    # built for the DNA path.
     if nucl_dbs:
-        log.info("Building nucleotide block from input for nhmmer")
-        nucl_block = build_sequence_block(input_fasta, DNA_ALPHABET)
+        nhmmer_search.require_binaries()
 
     all_features = []
     for name in aa_dbs + nucl_dbs:
@@ -488,7 +497,7 @@ def run_genome(input_fasta, db_paths, db_alphabets, outdir, prefix,
             name, os.path.basename(db_path), engine))
         t0 = time.time()
         if engine == "nhmmer":
-            hits = _search_nhmmer(db_path, nucl_block)
+            hits = _search_nhmmer(db_path, name, input_fasta, outdir, n_workers)
         else:
             hits = _search_bath(cut_fa, db_path, name, n_workers, outdir)
         log.info("  Search done in {:.1f}s".format(time.time() - t0))

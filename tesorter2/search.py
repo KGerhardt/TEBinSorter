@@ -146,6 +146,13 @@ def legacy_search_nucl(hmms, seq_block, megabases=None):
 
     bias_filter is off to match legacy_search (TEsorter's --nobias).
 
+    No model-size partitioning here, unlike legacy_search. That split exists to
+    choose between pyhmmer's parallel='queries' and parallel='targets', a switch
+    pyhmmer.nhmmer does not expose; and cpus defaults to 0, so nhmmer already
+    spreads the work across the machine on its own. Hand-rolled target chunking
+    on top of that competes with nhmmer's own parallelism rather than adding to
+    it.
+
     E-values need care. Z does not mean the same thing to the two engines:
     hmmsearch's -Z is a number of comparisons, while nhmmer's -Z is a database
     size in megabases. On top of that, pyhmmer's nhmmer applies Z twice, giving
@@ -160,6 +167,7 @@ def legacy_search_nucl(hmms, seq_block, megabases=None):
     # do not improve simply because an upstream stage removed sequences.
     if megabases is None:
         megabases = sum(len(s) for s in seq_block) / 1e6
+
     hits = _collect_hits(pyhmmer.nhmmer(
         hmms, seq_block,
         bias_filter=False,
