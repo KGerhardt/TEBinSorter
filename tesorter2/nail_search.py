@@ -119,29 +119,54 @@ def require_binaries():
             "MMSEQS_BIN.")
 
 
-def write_stopless(in_fasta, out_fasta):
-    """Copy a FASTA, replacing stop codons with X. Returns {name: length}.
+_STOP_TO_X = bytes.maketrans(b"*", b"X")
 
-    Lengths are captured on the same pass because nail's output does not report
-    target length, and the hit schema needs it.
+
+def _scan(fasta):
+    """One binary read pass: {name: residue count} and the total stop count.
+
+    Lengths are needed because nail's output does not report target length and
+    the hit schema does. Binary mode avoids decoding several hundred MB of
+    sequence that is only ever compared byte-wise.
     """
-    lengths = {}
-    name = None
-    n = 0
-    with open(in_fasta) as fin, open(out_fasta, "w") as fout:
-        for line in fin:
-            if line.startswith(">"):
-                name = line[1:].strip().split()[0]
+    lengths, stops, name = {}, 0, None
+    with open(fasta, "rb") as f:
+        for line in f:
+            if line[:1] == b">":
+                name = line[1:].split()[0].decode("utf-8", "replace")
                 lengths[name] = 0
-                fout.write(line)
-            else:
-                seq = line.strip()
-                n += seq.count("*")
-                lengths[name] = lengths.get(name, 0) + len(seq)
-                fout.write(seq.replace("*", "X") + "\n")
-    if n:
-        log.info("    nail: rewrote %d stop codons as X", n)
-    return lengths
+            elif name is not None:
+                n = len(line) - (1 if line.endswith(b"\n") else 0)
+                lengths[name] += n
+                stops += line.count(b"*", 0, n)
+    return lengths, stops
+
+
+def prepare_targets(in_fasta, out_fasta):
+    """Return (path for nail to search, {name: length}).
+
+    nail rejects '*', so a translated FASTA carrying stop codons has to be
+    rewritten with 'X'. Two things keep that cheap:
+
+    A file with no stop codons is handed to nail untouched and no copy is
+    written. That is the normal cascade case -- --mask-stops is mandatory
+    whenever nail shares a cascade with another amino-acid engine, so the
+    shared translated FASTA already says X. Copying a 300 MB file to change
+    nothing took over three minutes on the RepBase LTR set.
+
+    When a rewrite is needed it runs in binary with bytes.translate, which is a
+    C-level table substitution, rather than decoding and re-encoding every line.
+    Header lines are passed through untouched so an id containing '*' survives.
+    """
+    lengths, stops = _scan(in_fasta)
+    if stops == 0:
+        log.info("    nail: no stop codons, searching the input directly")
+        return in_fasta, lengths
+    with open(in_fasta, "rb") as fin, open(out_fasta, "wb") as fout:
+        for line in fin:
+            fout.write(line if line[:1] == b">" else line.translate(_STOP_TO_X))
+    log.info("    nail: rewrote %d stop codons as X", stops)
+    return out_fasta, lengths
 
 
 def run_nail(hmm_path, target_fasta, tbl_out, workdir, n_workers=4,
@@ -249,7 +274,7 @@ def run_and_parse(hmm_path, aa_fasta, db_name, model_lengths, workdir,
     """Sanitize, search, and parse. Returns hit dicts."""
     os.makedirs(workdir, exist_ok=True)
     target = os.path.join(workdir, "%s.nail_targets.faa" % db_name)
-    target_lengths = write_stopless(aa_fasta, target)
+    target, target_lengths = prepare_targets(aa_fasta, target)
     tbl = os.path.join(workdir, "%s.nail.tbl" % db_name)
     run_nail(hmm_path, target, tbl, workdir, n_workers=n_workers,
              report_evalue=report_evalue)
