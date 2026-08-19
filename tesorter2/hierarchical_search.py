@@ -91,6 +91,7 @@ but forfeits the work reduction that staging exists for.
 
 import logging
 import os
+import resource
 import time
 
 import numpy as np
@@ -456,6 +457,33 @@ def _rejected(arrays, remaining, floor):
     return {s for s in remaining if best.get(s, float("-inf")) < floor}
 
 
+def _cpu_times():
+    """(user, sys) seconds for this process AND its reaped children.
+
+    RUSAGE_CHILDREN is the load-bearing half: pyhmmer runs in-process threads,
+    but BATH, nail and the MMseqs2 prefilter nail shells out to are all
+    subprocesses, and RUSAGE_SELF sees none of their CPU. Reported per stage so
+    an in-process engine and a subprocess engine can be compared at all.
+    """
+    me = resource.getrusage(resource.RUSAGE_SELF)
+    kids = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return (me.ru_utime + kids.ru_utime, me.ru_stime + kids.ru_stime)
+
+
+def _count_records(path):
+    """Records in a FASTA. For an AA handoff this is frames, not sequences --
+    six per sequence -- which is the number the engine actually searches."""
+    n = 0
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                if line[0] == ">":
+                    n += 1
+    except OSError:
+        return None
+    return n
+
+
 def _materialize(kind, remaining, all_names, sources, workdir, tag):
     """FASTA of `remaining` in the alphabet this engine reads.
 
@@ -477,7 +505,7 @@ def _materialize(kind, remaining, all_names, sources, workdir, tag):
 def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
                        all_names, outdir, n_workers=4, reject_floors=None,
                        compat_rounding=False, compat_voting=False,
-                       search_space_mb=None):
+                       search_space_mb=None, timing=None):
     """Run one database's cascade. Returns its classification dicts.
 
     Every stage's hits land in legacy_hits stamped with engine and stage, and
@@ -506,12 +534,27 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
         if fasta is None:
             break
 
-        log.info("  [%s] stage %d (%s): %d sequences",
-                 db_name, stage_idx, engine.name, len(remaining))
+        n_seqs_in = len(remaining)
+        n_recs_in = _count_records(fasta)
+        log.info("  [%s] stage %d (%s): %d sequences in"
+                 "%s",
+                 db_name, stage_idx, engine.name, n_seqs_in,
+                 ("" if n_recs_in in (None, n_seqs_in)
+                  else " (%d %s records searched)"
+                       % (n_recs_in,
+                          "frame" if engine.input_kind == "aa" else "nucl")))
         t0 = time.time()
+        u0, s0 = _cpu_times()
         hits = engine.search(db_path, fasta, db_name, workdir, n_workers,
                              search_space_mb=search_space_mb)
-        log.info("    %d hits in %.1fs", len(hits), time.time() - t0)
+        wall = time.time() - t0
+        u1, s1 = _cpu_times()
+        user_s, sys_s = u1 - u0, s1 - s0
+        log.info("    %d hits in %.1fs wall  (user %.1fs, sys %.1fs, "
+                 "cpu %.1fs, %.0f%% of %d cores)",
+                 len(hits), wall, user_s, sys_s, user_s + sys_s,
+                 100.0 * (user_s + sys_s) / wall / max(n_workers, 1)
+                 if wall > 0 else 0.0, n_workers)
 
         # A stage may see hits for sequences an earlier stage already resolved
         # when it re-reads a shared source file; keep only the ones still in
@@ -548,6 +591,19 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
         results.extend(stage_results)
         log.info("    %d classified, %d rejected, %d remaining",
                  len(labeled), len(rejected), len(remaining))
+
+        if timing is not None:
+            timing.append({
+                "database": db_name, "stage": stage_idx,
+                "engine": engine.name, "input_kind": engine.input_kind,
+                "seqs_in": n_seqs_in,
+                "records_searched": n_recs_in if n_recs_in is not None else "",
+                "wall_s": round(wall, 2),
+                "user_s": round(user_s, 2), "sys_s": round(sys_s, 2),
+                "cpu_s": round(user_s + sys_s, 2),
+                "hits": len(hits), "classified": len(labeled),
+                "rejected": len(rejected), "remaining": len(remaining),
+            })
 
     if remaining:
         _record_exits(conn, db_name, len(stages) - 1,
@@ -594,6 +650,7 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
         translate_fasta(input_fasta, sources["aa"], mask_stops=mask_stops)
 
     per_db = {}
+    timing = []
     for db_name, db_path in db_paths.items():
         is_dna = db_alphabets[db_name] == DNA_ALPHABET
         names = DNA_STAGES if is_dna else protein_stages
@@ -611,9 +668,41 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
             conn, db_name, db_path, "dna" if is_dna else "aa", stages,
             sources, all_names, outdir, n_workers=n_workers,
             reject_floors=reject_floors, compat_rounding=compat_rounding,
-            compat_voting=compat_voting, search_space_mb=search_space_mb)
+            compat_voting=compat_voting, search_space_mb=search_space_mb,
+            timing=timing)
+
+    if timing:
+        _write_timing(timing, os.path.join(outdir, "cascade_timing.tsv"))
 
     return per_db
+
+
+def _write_timing(rows, path):
+    """Per-stage cost table, and a summary on the log.
+
+    A cascade's whole premise is that later stages see fewer sequences, so a
+    single total for the run hides the thing being claimed. This records what
+    each stage was actually handed and what it cost.
+    """
+    cols = ["database", "stage", "engine", "input_kind", "seqs_in",
+            "records_searched", "wall_s", "user_s", "sys_s", "cpu_s",
+            "hits", "classified", "rejected", "remaining"]
+    with open(path, "w") as f:
+        f.write("\t".join(cols) + "\n")
+        for r in rows:
+            f.write("\t".join(str(r[c]) for c in cols) + "\n")
+
+    by_engine = {}
+    for r in rows:
+        e = by_engine.setdefault(r["engine"], {"wall": 0.0, "cpu": 0.0,
+                                               "seqs": 0, "cls": 0})
+        e["wall"] += r["wall_s"]; e["cpu"] += r["cpu_s"]
+        e["seqs"] += r["seqs_in"]; e["cls"] += r["classified"]
+    log.info("Cascade cost by engine (summed over databases):")
+    for name, e in sorted(by_engine.items(), key=lambda kv: -kv[1]["wall"]):
+        log.info("  %-7s %8.1fs wall  %9.1fs cpu  %8d seqs in  %7d classified",
+                 name, e["wall"], e["cpu"], e["seqs"], e["cls"])
+    log.info("Per-stage detail -> %s", path)
 
 
 def _iter_names(fasta):
