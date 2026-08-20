@@ -84,16 +84,14 @@ def require_binaries():
             raise SystemExit(str(exc))
 
 
-# Optional pre-converted BATH HMMs, keyed by TEsorter2 db alias. Used as a
-# shortcut to skip bathconvert when these files already exist; the cache /
-# fallback conversion below is the self-contained path that always works.
-_PROJECT = "/anvil/projects/x-bio250374/daniel/bath_vs_hmmer"
-KNOWN_CONVERTED = {
-    "rexdb": os.path.join(_PROJECT, "analysis_for_paper/hmm_combine/hmm_dbs/rexdb.bath.hmm"),
-    "gydb":  os.path.join(_PROJECT, "analysis_for_paper/hmm_combine/hmm_dbs/gydb.bath.hmm"),
-    "line":  os.path.join(_PROJECT, "analysis_for_paper/bath_dbs/line_kapitonov.bath.hmm"),
-    "tir":   os.path.join(_PROJECT, "analysis_for_paper/bath_dbs/tir_pnas.bath.hmm"),
-}
+# There used to be a KNOWN_CONVERTED shortcut here mapping db aliases to
+# pre-converted BATH HMMs under a specific user's Anvil project directory. It
+# was removed: those paths exist on that machine, so the shortcut silently won
+# over the bundled databases and searched a third party's copy instead of the
+# one shipped with this package -- including after GyDB2 was corrected in
+# place. A database substituted without the caller knowing is worse than a
+# conversion that takes a minute. The cache / convert path below is
+# self-contained and always derives from the database actually being used.
 
 
 def _cache_path(hmm_path):
@@ -126,17 +124,12 @@ def resolve_bath_db(hmm_path, db_name=None):
     Resolution order:
       1. Cached conversion (see _cache_path: beside the source HMM when that
          directory is writable, else under a user cache dir) — reuse if present.
-      2. A known pre-converted file for this alias (KNOWN_CONVERTED).
-      3. Run bathconvert on hmm_path, writing the cache, and use that.
+      2. Run bathconvert on hmm_path, writing the cache, and use that.
     """
     cache = _cache_path(hmm_path)
     if os.path.isfile(cache):
         log.info(f"  BATH HMM (cached): {cache}")
         return cache
-
-    if db_name and db_name in KNOWN_CONVERTED and os.path.isfile(KNOWN_CONVERTED[db_name]):
-        log.info(f"  BATH HMM (pre-converted): {KNOWN_CONVERTED[db_name]}")
-        return KNOWN_CONVERTED[db_name]
 
     log.info(f"  Converting {os.path.basename(hmm_path)} to BATH format -> {cache}")
     # Write to a temp file first so an interrupted convert never leaves a
