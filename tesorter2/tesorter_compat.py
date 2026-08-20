@@ -8,7 +8,7 @@ as a drop-in replacement.
 
 Usage:
     TEsorter input.fasta -db rexdb -p 4
-    TEsorter input.fasta -db rexdb -p 4 --facet
+    TEsorter input.fasta -db rexdb -p 4
 """
 
 import argparse
@@ -82,11 +82,6 @@ def parse_args():
                         default=False,
                         help="Do not clean up temporary directory")
 
-    # TEsorter2 extension
-    parser.add_argument("--facet", action="store_true", default=False,
-                        help="Use facet pre-screening for faster search "
-                             "(AA databases only)")
-
     return parser.parse_args()
 
 
@@ -125,10 +120,8 @@ def main():
     from .hmm import peek_alphabet, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
     from .search import build_sequence_block, legacy_search
     from .sequence import translate_fasta, open_input, clean_seq
-    from .results import (create_db, store_sequences, store_legacy, store_facet,
-                         index_hits_tables, finalize_db,
-                         FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
-                         FACET_STAGE_LEGACY_FALLBACK)
+    from .results import (create_db, store_sequences, store_legacy,
+                         index_hits_tables, finalize_db)
     from .classifier import (classify_sequences, export_classification_tsv,
                             store_classifications, DB_CONFIGS)
     from .blast_pass2 import blast_pass2
@@ -176,36 +169,10 @@ def main():
         seq_fasta = args.sequence
 
     # Search
-    if args.facet and alphabet == AMINO_ALPHABET:
-        from .facet_classify import facet_classify, export_classifications_tsv
-        from .cross_family import find_missing_families, search_missing
-
-        classifications, verified_hits, legacy_hits = facet_classify(
-            db_path, seq_block, seq_fasta, alphabet,
-            n_workers=args.processors)
-
-        if verified_hits:
-            store_facet(conn, verified_hits, db_arg, stage=FACET_STAGE_VERIFIED)
-
-        # Cross-family
-        hmms = load_hmms(db_path)
-        hmms_dict = {h.name: h for h in hmms}
-        missing, _ = find_missing_families(classifications, hmms_dict)
-        if missing:
-            cf_hits = search_missing(missing, hmms_dict, seq_block, alphabet)
-            if cf_hits:
-                store_facet(conn, cf_hits, db_arg,
-                            stage=FACET_STAGE_CROSS_FAMILY)
-
-        if legacy_hits:
-            store_facet(conn, legacy_hits, db_arg,
-                        stage=FACET_STAGE_LEGACY_FALLBACK)
-        run_mode = "facet"
-    else:
-        hmms = load_hmms(db_path)
-        hits = legacy_search(hmms, seq_block)
-        store_legacy(conn, hits, db_arg)
-        run_mode = "default"
+    hmms = load_hmms(db_path)
+    hits = legacy_search(hmms, seq_block)
+    store_legacy(conn, hits, db_arg)
+    run_mode = "default"
 
     # Classify
     config = DB_CONFIGS.get(db_arg)
@@ -220,8 +187,7 @@ def main():
     index_hits_tables(conn)
 
     if config:
-        hits_table = "facet_hits" if run_mode == "facet" else "legacy_hits"
-        db_hits = load_hits(db_out, table=hits_table, database=db_arg)
+        db_hits = load_hits(db_out, table="legacy_hits", database=db_arg)
         if db_hits:
             # Drop-in TEsorter mode: keep raw domain-count clade voting so
             # output matches TEsorter exactly. The score-weighted vote is the

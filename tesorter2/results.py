@@ -57,17 +57,13 @@ CREATE TABLE IF NOT EXISTS sequences (
 CREATE TABLE IF NOT EXISTS legacy_hits (
     {_HIT_COLUMNS}
 );
-
-CREATE TABLE IF NOT EXISTS facet_hits (
-    {_HIT_COLUMNS}
-);
 """
 
 # Index creation is split by pipeline phase.
 #
 # _HITS_TABLE_INDEXES: built once the search phase finishes writing all
 #   HMM hits and before the deconfliction/classification phase begins.
-#   Those phases read from legacy_hits / facet_hits via filters on
+#   Those phases read from legacy_hits via filters on
 #   database / base_seq / domain_type, which benefit from an index.
 #
 # _FINAL_INDEXES: built at the very end of the pipeline, after
@@ -82,13 +78,6 @@ _HITS_TABLE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_leg_evalue  ON legacy_hits(i_evalue)",
     "CREATE INDEX IF NOT EXISTS idx_leg_db      ON legacy_hits(database)",
     "CREATE INDEX IF NOT EXISTS idx_leg_engine  ON legacy_hits(engine)",
-    "CREATE INDEX IF NOT EXISTS idx_fac_target  ON facet_hits(target_name)",
-    "CREATE INDEX IF NOT EXISTS idx_fac_baseseq ON facet_hits(base_seq)",
-    "CREATE INDEX IF NOT EXISTS idx_fac_query   ON facet_hits(query_name)",
-    "CREATE INDEX IF NOT EXISTS idx_fac_domain  ON facet_hits(domain_type)",
-    "CREATE INDEX IF NOT EXISTS idx_fac_evalue  ON facet_hits(i_evalue)",
-    "CREATE INDEX IF NOT EXISTS idx_fac_db      ON facet_hits(database)",
-    "CREATE INDEX IF NOT EXISTS idx_fac_stage   ON facet_hits(search_mode)",
 ]
 
 _FINAL_INDEXES = [
@@ -109,13 +98,6 @@ def _index_name(stmt):
 _ALL_DEFERRED_INDEX_NAMES = [
     _index_name(s) for s in (_HITS_TABLE_INDEXES + _FINAL_INDEXES)
 ]
-
-# search_mode values within facet_hits: which stage produced the hit.
-# legacy_hits is a single, flat table of true default-mode output and
-# does not use this tag.
-FACET_STAGE_VERIFIED = 0
-FACET_STAGE_CROSS_FAMILY = 1
-FACET_STAGE_LEGACY_FALLBACK = 2
 
 _INSERT_COLS = (
     "database, target_name, base_seq, strand, frame, target_len, "
@@ -162,7 +144,7 @@ def create_db(db_path):
 
 
 def index_hits_tables(conn):
-    """Build indexes on legacy_hits and facet_hits.
+    """Build indexes on legacy_hits.
 
     Call after the HMM search phase is complete (all hits written) and
     before the classification/deconfliction phase begins. The subsequent
@@ -278,30 +260,11 @@ def _hits_to_rows(hits, db_name, search_mode=0, engine="", stage=0):
 
 
 def store_legacy(conn, hits, db_name, engine="", stage=0):
-    """Store true default-mode (exhaustive) search hits to legacy_hits.
-
-    legacy_hits is fully separate from facet_hits. Never write facet
-    outputs here, even when facet mode falls back to an exhaustive
-    leftover search; that belongs in facet_hits with the matching stage.
-    """
+    """Store search hits to legacy_hits, the only hits table."""
     rows = _hits_to_rows(hits, db_name, search_mode=0, engine=engine,
                          stage=stage)
     conn.executemany(
         f"INSERT INTO legacy_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
-        rows,
-    )
-    conn.commit()
-
-
-def store_facet(conn, hits, db_name, stage, engine=""):
-    """Store facet-mode hits to facet_hits, stamped with the facet stage.
-
-    stage must be one of FACET_STAGE_VERIFIED, FACET_STAGE_CROSS_FAMILY,
-    FACET_STAGE_LEGACY_FALLBACK.
-    """
-    rows = _hits_to_rows(hits, db_name, search_mode=stage, engine=engine)
-    conn.executemany(
-        f"INSERT INTO facet_hits ({_INSERT_COLS}) VALUES ({_INSERT_PLACEHOLDERS})",
         rows,
     )
     conn.commit()
@@ -317,7 +280,7 @@ def export_tsv(conn, tsv_path, table="pass2_hits", db_name=None):
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits", "legacy_hits", "facet_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     columns = [
         "database", "target_name", "target_len", "query_name", "query_len",
@@ -359,7 +322,7 @@ def export_best_hits_tsv(conn, tsv_path, nucl_lengths=None,
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits", "legacy_hits", "facet_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     db_filter = ""
     params = ()
@@ -440,7 +403,7 @@ def export_all_domains_tsv(conn, tsv_path, nucl_lengths=None,
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits", "legacy_hits", "facet_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     query = f"""
         SELECT database, target_name, target_len,
@@ -518,7 +481,7 @@ def export_domain_sequences(conn, fasta_path, aa_fasta, nucl_lengths=None,
         table: "pass1_hits" or "pass2_hits"
         db_name: if set, filter to this database only
     """
-    assert table in ("pass1_hits", "pass2_hits", "legacy_hits", "facet_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
 
     seqs = load_sequences_dict(aa_fasta)
 
@@ -583,7 +546,7 @@ def query_best_hits(conn, table="pass2_hits", db_name=None):
     Returns:
         list of sqlite3.Row objects
     """
-    assert table in ("pass1_hits", "pass2_hits", "legacy_hits", "facet_hits")
+    assert table in ("pass1_hits", "pass2_hits", "legacy_hits")
     conn.row_factory = sqlite3.Row
 
     where = ""

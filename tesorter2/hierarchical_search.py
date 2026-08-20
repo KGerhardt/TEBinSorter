@@ -283,41 +283,6 @@ class BathEngine(Engine):
         return bath_search.parse_bath_tblout(tblout)
 
 
-class FacetEngine(Engine):
-    """hmmsearch with a sub-HMM pre-screen: spliced "facets" route each frame
-    to the models likely to produce its best hit, then the top hit per domain
-    family is verified with a full-model search, missing families are completed,
-    and frames with no facet signal fall back to a full search.
-
-    Mutually exclusive with the hmmer stage -- facet *is* hmmsearch with a
-    pre-screen in front, and its own legacy-fallback tier already runs the full
-    search on anything the screen missed, so pairing the two in one cascade
-    repeats that work rather than adding sensitivity.
-
-    The cascade uses facet's hits and classifies them with the same
-    classify_sequences every other stage uses, rather than facet's own tiered
-    classifications; that keeps one classification path across all stages. Run
-    --facet on its own for the tiered output with its confidence tiers.
-    """
-
-    name = "facet"
-    input_kind = "aa"
-    db_kinds = ("aa",)
-
-    def search(self, db_path, fasta, db_name, workdir, n_workers,
-               search_space_mb=None):
-        # search_space_mb is unused for the same reason as the hmmer stage.
-        from .facet_classify import facet_classify_v2
-        block = build_sequence_block(fasta, AMINO_ALPHABET)
-        log.info("    facet: pre-screen over %d frames", len(block))
-        _cls, verified, cross, fallback = facet_classify_v2(
-            db_path, block, fasta, AMINO_ALPHABET,
-            n_workers=n_workers, checkpoint_dir=workdir)
-        log.info("    facet: %d verified + %d cross-family + %d fallback",
-                 len(verified), len(cross), len(fallback))
-        return list(verified) + list(cross) + list(fallback)
-
-
 class NailEngine(Engine):
     """nail: MMseqs2-seeded sparse approximation of HMMER's Forward/Backward.
 
@@ -351,7 +316,6 @@ class NailEngine(Engine):
 
 ENGINES = {
     "hmmer": HmmerEngine,
-    "facet": FacetEngine,
     "nhmmer": NhmmerEngine,
     "bath": BathEngine,
     "nail": NailEngine,
@@ -383,16 +347,15 @@ def build_stages(names, mask_stops=False):
     for n in names:
         n = _ENGINE_ALIASES.get(n.strip(), n.strip())
         if n not in ENGINES:
-            raise ValueError("Unknown engine %r; known engines: %s"
-                             % (n, ", ".join(sorted(ENGINES))))
+            # A configuration error, not a bug: exit cleanly rather than
+            # dumping a traceback at someone with a typo in --stages.
+            hint = ""
+            if n == "facet":
+                hint = (" The facet engine was removed; use 'hmmer' for the "
+                        "same databases.")
+            raise SystemExit("Unknown engine %r; known engines: %s.%s"
+                             % (n, ", ".join(sorted(ENGINES)), hint))
         stages.append(ENGINES[n]())
-
-    picked = {s.name for s in stages}
-    if {"facet", "hmmer"} <= picked:
-        raise SystemExit(
-            "--stages cannot contain both facet and hmmer: facet is hmmsearch "
-            "with a pre-screen in front, and its fallback tier already runs the "
-            "full search on whatever the screen missed. Pick one.")
 
     if not mask_stops and any(s.name == "nail" for s in stages) \
             and any(s.input_kind == "aa" and s.name != "nail" for s in stages):

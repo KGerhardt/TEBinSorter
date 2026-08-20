@@ -698,8 +698,8 @@ def store_classifications(conn, results, database=None, mode="default",
                           engine=None, stage=0):
     """Store classification results in SQLite.
 
-    The mode column discriminates default-mode classifications from
-    facet-mode classifications so both can coexist in a single
+    The mode column records which search path produced the call
+    ('default' or 'hierarchical'), so runs can coexist in a single
     companion database.
 
     engine/stage carry cascade provenance: which search tool produced the

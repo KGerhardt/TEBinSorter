@@ -15,10 +15,8 @@ from .paths import get_db_dir
 from .hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
 from .search import build_sequence_block, legacy_search, legacy_search_nucl
 from .sequence import translate_fasta, open_input
-from .results import (create_db, store_sequences, store_legacy, store_facet,
-                     index_hits_tables, finalize_db,
-                     FACET_STAGE_LEGACY_FALLBACK)
-from .cross_family import find_missing_families, search_missing, search_missing_v2
+from .results import (create_db, store_sequences, store_legacy,
+                     index_hits_tables, finalize_db)
 from .classifier import (classify_sequences, export_classification_tsv,
                        store_classifications, reconcile_classifications,
                        DB_CONFIGS)
@@ -126,8 +124,7 @@ def parse_args(argv=None):
              "Each stage searches only what earlier stages left unresolved, "
              "per database. DNA databases always use nhmmer, the only engine "
              "that reads DNA profiles. e.g. --stages nail,hmmer,bath. "
-             "facet and hmmer are mutually exclusive; a cascade containing "
-             "nail also requires --mask-stops.")
+             "A cascade containing nail also requires --mask-stops.")
     seq.add_argument("--bath", action="store_true", default=False,
                      help="Use BATH (frameshift-aware translated nucleotide "
                           "search) instead of hmmer for amino-acid databases. "
@@ -227,8 +224,7 @@ def _normalize_argv(argv):
 
 
 def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
-                        facet_fallback=False, dna_engine="nhmmer",
-                        n_workers=0):
+                        dna_engine="nhmmer", n_workers=0):
     """
     Exhaustive single-pass nobias search against all models.
 
@@ -236,11 +232,7 @@ def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
     amino-acid databases go through hmmsearch. Pass dna_engine="hmmsearch" to
     force the old single-strand behaviour on DNA databases.
 
-    When facet_fallback=False (default), this is a true default-mode run and
-    hits go to legacy_hits. When True, this call is the DNA-alphabet branch
-    of a facet-mode run (facet mode is AA-only); those hits go to facet_hits
-    as a legacy-fallback-stage write so the facet and legacy tables stay
-    fully disjoint.
+    Hits go to legacy_hits, which is now the only hits table.
     """
     log.info(f"Loading HMMs from {db_name}")
     t0 = time.time()
@@ -265,10 +257,7 @@ def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
     t3 = time.time()
     log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
 
-    if facet_fallback:
-        store_facet(conn, hits, db_name, stage=FACET_STAGE_LEGACY_FALLBACK)
-    else:
-        store_legacy(conn, hits, db_name)
+    store_legacy(conn, hits, db_name)
     return len(hits)
 
 

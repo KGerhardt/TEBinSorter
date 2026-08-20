@@ -6,7 +6,7 @@ TEsorter2 is a reimplementation of [TEsorter](https://github.com/zhangrengang/TE
 keeps its classification semantics while introducing three major improvements:
  
 1. **Speed**: HMMER's limited parallelism is replaced by [pyHMMER](https://pyhmmer.readthedocs.io/)
-   with workload-aware load balancing, plus an optional facet pre-screen and a parallelized
+   with workload-aware load balancing, plus a parallelized
    second-pass BLAST.
 2. **Sensitivity on degraded copies**: an optional [BATH](https://github.com/TravisWheelerLab/BATH)
    engine performs frameshift-aware translated search directly against nucleotide sequence.
@@ -159,25 +159,6 @@ accuracy ≥ 0.5, normalized score ≥ 0.1). Two consequences on the rice/`sine`
 The practical effect is bounded: dropping the E-value filter altogether raises the count from 50
 to 59, so no threshold choice recovers much more. SINE-specific filters are not implemented; use
 `--dna-engine hmmsearch` if you need the old behaviour for comparison.
-
-### Facet pre-screen (`--stages facet`)
-
-Pre-screens amino-acid databases with spliced sub-HMMs ("facets") to route each sequence only to
-the models likely to produce its best hit:
-
-1. **Facet screen**: tiered sub-HMMs (96 → 64 → 48 → 32 aa) searched against all six translated
-   frames.
-2. **Targeted verification**: top facet hit per domain family verified with a full-model
-   `--nobias` search.
-3. **Cross-family completion**: verified frames searched for missing domain families.
-4. **Legacy fallback**: frames with no facet signal get a full search.
-
-Faster than a plain `hmmer` stage on AA databases, with 99.8% post-filter recall. Available as a
-cascade engine only — `--stages facet` or `--stages facet,bath`. It is mutually exclusive with
-`hmmer`: facet *is* hmmsearch with a pre-screen in front, and step 4 already runs the full search
-on whatever the screen missed.
-
-DNA databases always use nhmmer; DNA facets do not repay their overhead.
 
 ### BATH mode (`--bath`)
  
@@ -437,13 +418,6 @@ Supported: `-db/--hmm-database`, `--db-hmm`, `-st/--seq-type`, `-pre/--prefix`, 
 - **`genome.py`** — Genome mode: windowing, per-domain classification, overlap resolution, GFF3/summary
 - **`results.py`** — SQLite persistence with pre-parsed columns (base_seq, strand, frame, domain_type)
 - **`deconflict.py`** — numpy-based hit deconfliction and parameterized filtering
-### Facet classification
- 
-- **`decompose_hmm.py`** — standalone sub-HMM decomposition and splicing (tiered windows,
-  configurable overlap; works for DNA and AA HMMs)
-- **`model_graph.py`** — cross-model similarity graph, precomputed for bundled databases
-- **`facet_classify.py`** — screen → verify → cross-family completion → legacy fallback
-- **`cross_family.py`** — targeted search for missing domain families in classified frames
 ### Classification and post-processing
  
 - **`classifier.py`** — config-driven classification from domain hits; per-database domain
@@ -453,44 +427,6 @@ Supported: `-db/--hmm-database`, `--db-hmm`, `-st/--seq-type`, `-pre/--prefix`, 
 ---
  
 ## Extended methods
- 
-### HMM facets
- 
-pyHMMER exposes an HMM's emission probabilities in Python. TEsorter2 uses them to locate conserved
-subregions that most influence HMMER's decision-making, and extracts each such region into a
-"facet": a complete, self-contained HMM whose emission and transition probabilities are cloned from
-its parent over the corresponding window.
- 
-Facets are sized at 96, 64, 48 or 32 amino acids, using the longest size the parent supports;
-models of ≤32 aa are used as-is. Windows are chosen to maximize the summed emission probability
-over the parent and may overlap by at most 33% of facet length.
- 
-For a parent HMM of length *M* and a query of length *N*, one `hmmsearch` is a dynamic-programming
-matrix of size *M × N*. A facet search replaces *M* with a facet size *F* (*F* < *M*), yielding an
-*F × N* slice with a proportional reduction in work. Three properties make this profitable:
- 
-- **Short models are more decisive.** A full-length model accumulates information about search
-  effort across the whole sequence; a short model confirms or rejects a local region quickly.
-- **Facet scores predict full-length scores.** A good facet hit almost always implies a good
-  full-length hit, making facets a fast approximation of the final score.
-- **Facet sizes pack SIMD lanes.** 96/64/32 aa are consumed in 16-aa bites by HMMER's internals,
-  reducing low-level CPU waste relative to less divisible sizes.
-Facets do not reproduce their parent's domain detections exactly, so a full-length verification is
-still required for correctness. The acceleration comes from *skipping* verifications: the TE HMMs
-within each database are highly redundant (either wholly, as in single-type databases, or in
-subcollections, as in REXdb and GyDB), so most models in a cluster hit the same sequence at
-differing strengths and all but the best are discarded downstream anyway — yet detecting a weak hit
-costs exactly as much as detecting a strong one. TEsorter2 ships precomputed all-vs-all similarity
-graphs (obtained by searching each model's consensus against every other model in the database)
-that identify these clusters. Facet hits order the parent searches within each cluster from highest
-to lowest, and verification stops as soon as a high-scoring parent is confirmed — typically 1–2
-parent searches per cluster per sequence instead of dozens.
- 
-In effect, the deconfliction that would otherwise happen *after* an exhaustive search is moved
-*before* it, at the cost of a cheap approximate screen. Post-filter agreement with the exhaustive
-search is 99.98% at hit level and 99.8% at family recall (4 misses of 2,090 on rice REXdb).
- 
-The facet generation code is intentionally a separate module and is reusable in other projects.
  
 ### Parallel strategy
  
@@ -509,21 +445,6 @@ TEsorter2 precomputes each model's expected cost (*M²*) and bins them: **small*
 `targets` mode. Sequences are reused from the same in-memory object across both searches, so the
 split is essentially free, yielding near-full CPU utilization in the most efficient mode available
 for each model class.
- 
-**Facet search.** Staged: facets from all models are searched with `--nobias` exactly as in the
-default search; top facet hits per sequence are ordered by quality, noting each facet's parent;
-each sequence is searched against its best facet's parent at full length. If it verifies, no
-further searches run; otherwise the next-best facet hit for a *different* parent is tried. Most
-sequences verify on the first attempt; almost all within three. Because verification stops at a
-single best hit, a cross-family pass then searches each verified sequence against the top facet
-hit's parent for every *other* TE family, preserving both primary and secondary labelling
-sensitivity. Sequences still unclassified fall back to the legacy search.
- 
-The expensive part of HMMER is finding a match. Facets route each sequence only to the models
-likely to produce its best hits, skipping the redundant weak hits that would be discarded anyway.
-The leftovers sent to the legacy search are mostly genuine rejects with no TE signal, and are
-cheap: a REXdb legacy search spends ~92% of its runtime on the ~71k of ~880k protein frames that
-actually contain hits.
  
 ---
 
