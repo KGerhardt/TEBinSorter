@@ -274,7 +274,7 @@ def _hit_to_feature(h, engine, config):
     if g_start > g_end:
         g_start, g_end = g_end, g_start
 
-    order, superfamily, disp_clade, complete = classify_element(
+    order, superfamily, disp_clade, complete, _ = classify_element(
         [gene], [clade], [model], [norm_score], config)
     cls = _fmt_cls(order, superfamily, disp_clade)
 

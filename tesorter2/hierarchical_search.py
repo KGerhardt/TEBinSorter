@@ -505,7 +505,7 @@ def _materialize(kind, remaining, all_names, sources, workdir, tag):
 def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
                        all_names, outdir, n_workers=4, reject_floors=None,
                        compat_rounding=False, compat_voting=False,
-                       search_space_mb=None, timing=None):
+                       search_space_mb=None, timing=None, min_clade_delta=0.0):
     """Run one database's cascade. Returns its classification dicts.
 
     Every stage's hits land in legacy_hits stamped with engine and stage, and
@@ -571,7 +571,8 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
             stage_results = classify_sequences(
                 arrays, config,
                 compat_rounding=compat_rounding,
-                compat_voting=compat_voting)
+                compat_voting=compat_voting,
+                min_clade_delta=min_clade_delta)
             for r in stage_results:
                 r["engine"] = engine.name
                 r["stage"] = stage_idx
@@ -619,7 +620,8 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
 def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
                 protein_stages=("hmmer", "bath"), n_workers=4,
                 reject_floors=None, compat_rounding=False,
-                compat_voting=False, aa_fasta=None, mask_stops=False):
+                compat_voting=False, aa_fasta=None, mask_stops=False,
+                min_clade_delta=0.0):
     """Run the cascade for every database. Returns {db_name: [results]}.
 
     Databases are searched independently and reconciled by the caller, exactly
@@ -669,7 +671,7 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
             sources, all_names, outdir, n_workers=n_workers,
             reject_floors=reject_floors, compat_rounding=compat_rounding,
             compat_voting=compat_voting, search_space_mb=search_space_mb,
-            timing=timing)
+            timing=timing, min_clade_delta=min_clade_delta)
 
     if timing:
         _write_timing(timing, os.path.join(outdir, "cascade_timing.tsv"))

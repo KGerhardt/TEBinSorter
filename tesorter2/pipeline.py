@@ -162,6 +162,22 @@ def parse_args(argv=None):
                      default=False,
                      help="Do not reverse-complement minus-strand sequences "
                           "when writing the .cls.lib library.")
+    seq.add_argument(
+        "--min-clade-delta", type=float, default=0.0, metavar="BITS",
+        help="Demote a clade call to 'mixture' when the vote could be "
+             "overturned by a per-hit score offset smaller than BITS. The "
+             "clade vote sums score/model_len, so a uniform offset favours "
+             "clades carried by short models; this is the margin the call can "
+             "absorb. Only the Clade field is affected -- Order and "
+             "Superfamily are never touched. 0 (the default) never demotes, "
+             "leaving classification "
+             "bit-for-bit unchanged. ~5.6 is the measured pyhmmer-to-BATH "
+             "offset, so that is the scale at which a call is engine-dependent.")
+    seq.add_argument(
+        "--emit-clade-delta", action="store_true", default=False,
+        help="Append a CladeDelta column to the per-database .cls.tsv with "
+             "that margin in bits ('inf' = only one clade in play). "
+             "Diagnostic only; does not change any call.")
     seq.add_argument("--emit-bath", action="store_true", default=False,
                      help="Emit routed FASTA partitions for BATH to "
                           "{outdir}/BATHwater/.")
@@ -436,7 +452,8 @@ def main():
             n_workers=args.processors,
             compat_rounding=args.compat_tesorter_rounding,
             compat_voting=args.compat_tesorter_voting,
-            mask_stops=args.mask_stops)
+            mask_stops=args.mask_stops,
+            min_clade_delta=getattr(args, "min_clade_delta", 0.0))
 
         log.info("Indexing hits tables")
         index_hits_tables(conn)
@@ -445,7 +462,9 @@ def main():
             if not results:
                 continue
             cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
-            export_classification_tsv(results, cls_tsv)
+            export_classification_tsv(
+                results, cls_tsv,
+                include_clade_delta=getattr(args, "emit_clade_delta", False))
             log.info(f"  {name}: {len(results)} classified -> {cls_tsv}")
 
             # Companion files: the RepeatMasker library only. The domain-level
@@ -524,12 +543,15 @@ def main():
         log.info(f"  Classifying {name} ({hits_table})")
         results = classify_sequences(hits, config,
                                      compat_rounding=args.compat_tesorter_rounding,
-                                     compat_voting=args.compat_tesorter_voting)
+                                     compat_voting=args.compat_tesorter_voting,
+                                     min_clade_delta=getattr(args, "min_clade_delta", 0.0))
 
         # Store and export per-database classification (TEsorter format)
         store_classifications(conn, results, database=name)
         cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
-        export_classification_tsv(results, cls_tsv)
+        export_classification_tsv(
+            results, cls_tsv,
+            include_clade_delta=getattr(args, "emit_clade_delta", False))
         log.info(f"    {len(results)} classified -> {cls_tsv}")
 
         # TEsorter-compatible companion files, named {prefix}.{db}.* to sit

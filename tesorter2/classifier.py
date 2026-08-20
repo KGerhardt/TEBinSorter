@@ -348,7 +348,8 @@ def select_domain_indices(hits, config, compat_rounding=False):
 # Classification
 # ---------------------------------------------------------------------------
 
-def classify_element(genes, clades, models, scores, config, compat_voting=False):
+def classify_element(genes, clades, models, scores, config, compat_voting=False,
+                     model_lens=None, min_clade_delta=0.0):
     """Classify a single TE element from its domain hits.
 
     Args:
@@ -364,20 +365,80 @@ def classify_element(genes, clades, models, scores, config, compat_voting=False)
                        score-weighted vote.
 
     Returns:
-        (order, superfamily, clade, complete)
+        (order, superfamily, clade, complete, clade_delta)
+
+        clade_delta is the offset margin from clade_delta_star -- always
+        computed when model_lens is given, and reported whether or not
+        min_clade_delta is in use.
     """
     parser = config["clade_parser"]
 
     if parser == "rexdb":
         return _classify_rexdb(genes, clades, models, scores, config,
-                               compat_voting=compat_voting)
+                               compat_voting=compat_voting,
+                               model_lens=model_lens,
+                               min_clade_delta=min_clade_delta)
     elif parser == "gydb":
         return _classify_gydb(genes, clades, models, scores, config,
-                              compat_voting=compat_voting)
+                              compat_voting=compat_voting,
+                              model_lens=model_lens,
+                              min_clade_delta=min_clade_delta)
     elif parser == "sine":
-        return "SINE", "unknown", "unknown", "unknown"
+        return "SINE", "unknown", "unknown", "unknown", None
     else:
-        return "Unknown", "unknown", "unknown", "unknown"
+        return "Unknown", "unknown", "unknown", "unknown", None
+
+
+def clade_delta_star(clades, scores, model_lens):
+    """Smallest per-hit bit offset that would change the clade winner.
+
+    The clade vote is an argmax over summed *normalized* score,
+    W(c) = sum over that clade's hits of score/model_len. A per-hit offset of
+    delta bits therefore does NOT shift every clade equally -- it is divided by
+    model length, so
+
+        W_delta(c) = W(c) + delta * K(c),   K(c) = sum of 1/model_len
+
+    A clade carried by three short models gains far more from +delta than one
+    carried by a single long model. That asymmetry is why a systematic
+    inter-engine score offset moves clade calls at all: BATH scores ~5.6 bits
+    above pyhmmer on shared pairs, which is enough to reorder GyDB clades (314
+    models, clade encoded in the model name) while leaving superfamily intact.
+
+    For the winner w and any rival c, the two are level when
+
+        delta = (W(w) - W(c)) / (K(c) - K(w))
+
+    and this returns the smallest such |delta| over all rivals: the largest
+    offset the call can absorb in either direction and still stand. Big means
+    the call is robust to rescoring, a different engine, or a database
+    revision; small means it was decided by a margin no wider than the noise
+    between engines.
+
+    Returns inf when only one clade is in play (nothing to flip), and None if
+    model lengths were not supplied.
+    """
+    if model_lens is None:
+        return None
+    weights = defaultdict(float)
+    sens = defaultdict(float)
+    for c, s, ln in zip(clades, scores, model_lens):
+        weights[c] += s
+        if ln:
+            sens[c] += 1.0 / float(ln)
+    if len(weights) < 2:
+        return float("inf")
+    win = max(weights, key=lambda x: weights[x])
+    best = float("inf")
+    for c in weights:
+        if c == win:
+            continue
+        dk = sens[c] - sens[win]
+        if dk == 0:
+            # Same offset sensitivity: no uniform offset can ever reorder them.
+            continue
+        best = min(best, abs((weights[win] - weights[c]) / dk))
+    return best
 
 
 def _clade_winner(clades, scores, compat_voting, compat_rule="rexdb"):
@@ -417,9 +478,32 @@ def _clade_winner(clades, scores, compat_voting, compat_rule="rexdb"):
     return max_clade, len(weights), clear
 
 
-def _classify_rexdb(genes, clades, models, scores, config, compat_voting=False):
+def _demote(display_clade, delta, min_clade_delta):
+    """Blank a clade whose vote a small score offset could overturn.
+
+    Applied to the clade string ONLY, after classification is complete.
+    Routing it through the existing `clear` flag instead would be wrong: that
+    flag also propagates to superfamily and order when a sequence's domains
+    span several, so a clade-margin threshold would silently degrade
+    Gypsy -> mixture at superfamily and LTR -> mixture at order. Measured on a
+    400-sequence GyDB sample, 6 of 42 demotions moved superfamily and 3 moved
+    order. A margin on the clade vote is evidence about the clade and nothing
+    above it.
+    """
+    if min_clade_delta <= 0 or delta is None:
+        return display_clade
+    if delta >= min_clade_delta:
+        return display_clade
+    if display_clade in ("mixture", "unknown"):
+        return display_clade
+    return "mixture"
+
+
+def _classify_rexdb(genes, clades, models, scores, config, compat_voting=False,
+                    model_lens=None, min_clade_delta=0.0):
     """REXdb classification logic."""
     max_clade, n_distinct, clear = _clade_winner(clades, scores, compat_voting)
+    delta = None if compat_voting else clade_delta_star(clades, scores, model_lens)
 
     order, superfamily, _, _ = parse_clade_rexdb(
         [m for m, c in zip(models, clades) if c == max_clade][0])
@@ -453,13 +537,16 @@ def _classify_rexdb(genes, clades, models, scores, config, compat_voting=False):
     if display_clade.startswith("Ty"):
         display_clade = "unknown"
 
-    return order, superfamily, display_clade, complete
+    display_clade = _demote(display_clade, delta, min_clade_delta)
+    return order, superfamily, display_clade, complete, delta
 
 
-def _classify_gydb(genes, clades, models, scores, config, compat_voting=False):
+def _classify_gydb(genes, clades, models, scores, config, compat_voting=False,
+                   model_lens=None, min_clade_delta=0.0):
     """GyDB classification logic. Requires clade_map."""
     max_clade, n_distinct, clear = _clade_winner(
         clades, scores, compat_voting, compat_rule="gydb")
+    delta = None if compat_voting else clade_delta_star(clades, scores, model_lens)
 
     # Look up order/superfamily from clade map
     clade_map = config.get("_clade_map", {})
@@ -486,7 +573,8 @@ def _classify_gydb(genes, clades, models, scores, config, compat_voting=False):
     except KeyError:
         complete = "unknown"
 
-    return order, superfamily, display_clade, complete
+    display_clade = _demote(display_clade, delta, min_clade_delta)
+    return order, superfamily, display_clade, complete, delta
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +582,7 @@ def _classify_gydb(genes, clades, models, scores, config, compat_voting=False):
 # ---------------------------------------------------------------------------
 
 def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False,
-                       compat_voting=False):
+                       compat_voting=False, min_clade_delta=0.0):
     """Full classification: hmm2best -> filter -> classify per sequence.
 
     Args:
@@ -563,6 +651,7 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False,
         clades = []
         models = []
         scores = []
+        model_lens = []
         domain_strs = []
 
         for i in sorted_indices:
@@ -580,10 +669,12 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False,
             clades.append(clade)
             models.append(model)
             scores.append(float(hits["norm_score"][i]))
+            model_lens.append(float(hits["model_len"][i]))
             domain_strs.append(f"{display_gene}|{clade}")
 
-        order, superfamily, max_clade, complete = classify_element(
-            genes, clades, models, scores, config, compat_voting=compat_voting)
+        order, superfamily, max_clade, complete, clade_delta = classify_element(
+            genes, clades, models, scores, config, compat_voting=compat_voting,
+            model_lens=model_lens, min_clade_delta=min_clade_delta)
 
         total_norm_score = float(np.sum(hits["norm_score"][sorted_indices]))
 
@@ -596,6 +687,7 @@ def classify_sequences(hits, config, gydb_clade_map=None, compat_rounding=False,
             "strand": strand,
             "domains": " ".join(domain_strs),
             "score": total_norm_score,
+            "clade_delta": clade_delta,
         })
 
     log.info(f"  Classified: {len(results)} sequences")
@@ -652,7 +744,8 @@ def store_classifications(conn, results, database=None, mode="default",
 
 
 def export_classification_tsv(results, out_path, include_secondary=False,
-                              include_so=False, include_lineage=False):
+                              include_so=False, include_lineage=False,
+                              include_clade_delta=False):
     """Export classification results as TSV.
 
     Default format matches TEsorter cls.tsv (7 columns). If
@@ -660,7 +753,11 @@ def export_classification_tsv(results, out_path, include_secondary=False,
     per-database classifications and evidence scores in descending order.
     If include_so=True, appends the Sequence Ontology term and accession for
     the Order/Superfamily call. If include_lineage=True, appends the sub-clade
-    Lineage ('.' when no database resolved one). All optional columns are
+    Lineage ('.' when no database resolved one). If include_clade_delta=True,
+    appends CladeDelta -- the clade_delta_star offset margin, in bits: how large
+    a per-hit score offset the clade call can absorb before the winner changes.
+    'inf' means only one clade was in play; '.' means it was not computed.
+    All optional columns are
     appended, leaving the positions of the original seven untouched -- EDTA and
     friends read this file positionally as (id, order, superfamily).
     """
@@ -672,6 +769,8 @@ def export_classification_tsv(results, out_path, include_secondary=False,
         columns += ["SO_name", "SO_ID"]
     if include_lineage:
         columns.append("Lineage")
+    if include_clade_delta:
+        columns.append("CladeDelta")
     with open(out_path, "w") as f:
         f.write("\t".join(columns) + "\n")
         for r in results:
@@ -692,6 +791,12 @@ def export_classification_tsv(results, out_path, include_secondary=False,
                 line += [so_name, so_id]
             if include_lineage:
                 line.append(r.get("lineage") or ".")
+            if include_clade_delta:
+                d = r.get("clade_delta")
+                # "inf" = only one clade in play, nothing to flip; "." = not
+                # computed (compat voting, or no model lengths available).
+                line.append("." if d is None
+                            else ("inf" if d == float("inf") else f"{d:.4f}"))
             f.write("\t".join(line) + "\n")
 
 
