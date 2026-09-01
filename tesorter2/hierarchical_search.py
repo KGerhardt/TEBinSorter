@@ -165,9 +165,10 @@ class Engine:
     """A search tool, reduced to what a cascade needs to know about it.
 
     name          identifier used in --stages and stamped on every hit
-    input_kind    "aa" if it searches six-frame translations, "nucl" if it
-                  reads nucleotide sequence directly. Decides which FASTA the
-                  driver materializes for this stage.
+    input_kind    which FASTA the driver materializes for this stage:
+                  "aa" (six-frame translations), "aa_nostop" (the same with
+                  stop codons rewritten as 'X', which is all nail can read),
+                  or "nucl" (the nucleotide input, read directly).
     db_kinds      database alphabets it can search
     """
 
@@ -288,6 +289,12 @@ class NailEngine(Engine):
 
     Reads the HMMER3 .hmm directly, so no conversion step. Amino-acid only.
 
+    Reads the "aa_nostop" source: nail rejects '*' outright, so its targets
+    are the shared translation with stops rewritten as 'X'. That rewrite is
+    nail-local -- hmmer and bath keep the stop-bearing translation -- so a
+    cascade mixing them is deliberately searching two variants of the same
+    sequence. See build_stages for what that costs.
+
     Intended as a cheap first stage. Note that nail exposes no -Z equivalent,
     so search_space_mb cannot be honoured: its E-values scale with whatever
     target set it is handed. Harmless at stage 0, which sees the full input;
@@ -296,7 +303,7 @@ class NailEngine(Engine):
     """
 
     name = "nail"
-    input_kind = "aa"
+    input_kind = "aa_nostop"
     db_kinds = ("aa",)
 
     def __init__(self, report_evalue=10.0):
@@ -329,19 +336,30 @@ _ENGINE_ALIASES = {"pyhmmer": "hmmer"}
 # only engine that can read a DNA profile, so there is nothing to stage.
 DNA_STAGES = ("nhmmer",)
 
+# The protein cascade every run gets unless --stages says otherwise: cheapest
+# first, most sensitive last. nail strips the easy majority, hmmer is the
+# replication baseline, bath is the frameshift-aware last recall pass over
+# whatever the first two could not label.
+DEFAULT_STAGES = ("nail", "hmmer", "bath")
 
-def build_stages(names, mask_stops=False):
+
+def build_stages(names):
     """Instantiate engines from a list of names (e.g. ['bath', 'pyhmmer']).
 
-    nail cannot read stop codons -- it rejects '*' outright -- so its stage
-    masks its own targets no matter what the run was configured to do. With
-    global masking off, a cascade containing nail would therefore run stage 0
-    on masked input and later stages on unmasked input. That is not a cosmetic
-    inconsistency: masking changes what is found (15 -> 17 classified on the
-    TIR fixture), so the early stage would be deciding exits against evidence
-    the later stages never see, and any comparison between the stages would be
-    measuring the substitution rather than the engines. Refuse rather than
-    silently mix.
+    A cascade containing nail searches two variants of the same sequence, and
+    that is accepted rather than refused. nail cannot read stop codons, so its
+    targets are always '*' -> 'X' masked; hmmer and bath read the stop-bearing
+    translation unless --mask-stops was asked for globally.
+
+    The asymmetry is not cosmetic. 'X' is an unknown residue rather than a
+    terminator, so a profile can align straight through a premature stop:
+    masking took the TIR fixture from 15 classified to 17. Those two extra
+    sequences exit at nail's stage on evidence hmmer would never have seen,
+    which is exactly the read-through-degraded-copies behaviour nail is placed
+    first to get cheaply -- but it also means a stage-to-stage comparison
+    within one cascade is measuring the substitution as well as the engines.
+    Anything comparing engine against engine must hold the input identical
+    (--mask-stops on, or a stage list without nail).
     """
     stages = []
     for n in names:
@@ -357,14 +375,36 @@ def build_stages(names, mask_stops=False):
                              % (n, ", ".join(sorted(ENGINES)), hint))
         stages.append(ENGINES[n]())
 
-    if not mask_stops and any(s.name == "nail" for s in stages) \
-            and any(s.input_kind == "aa" and s.name != "nail" for s in stages):
-        raise SystemExit(
-            "A cascade containing nail alongside another amino-acid engine "
-            "requires --mask-stops. nail cannot read stop codons and masks its "
-            "own targets regardless, so without global masking its stage would "
-            "search different sequence than the stages behind it.")
     return stages
+
+
+def stages_for_input(names, seq_type):
+    """Drop the stages this input cannot feed.
+
+    Protein input skips six-frame translation, so there is no nucleotide
+    source: BATH reads nucleotide sequence -- it translates internally, with
+    frameshifts -- and cannot run at all. Dropping it from the default cascade
+    is routine; being left with no stage is a configuration error.
+    """
+    names = [n.strip() for n in names]
+    if seq_type != "prot":
+        return names
+    kept, dropped = [], []
+    for n in names:
+        engine = ENGINES.get(_ENGINE_ALIASES.get(n, n))
+        target = dropped if (engine is not None
+                             and engine.input_kind == "nucl") else kept
+        target.append(n)
+    if dropped:
+        log.warning("Protein input: dropping %s -- it reads nucleotide "
+                    "sequence, which -st prot does not provide",
+                    ", ".join(dropped))
+    if not kept:
+        raise SystemExit(
+            "No stage left to run: every engine in --stages (%s) reads "
+            "nucleotide sequence, which -st prot does not provide. Use nail "
+            "and/or hmmer." % ", ".join(dropped))
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +545,8 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
                  ("" if n_recs_in in (None, n_seqs_in)
                   else " (%d %s records searched)"
                        % (n_recs_in,
-                          "frame" if engine.input_kind == "aa" else "nucl")))
+                          "frame" if engine.input_kind.startswith("aa")
+                          else "nucl")))
         t0 = time.time()
         u0, s0 = _cpu_times()
         hits = engine.search(db_path, fasta, db_name, workdir, n_workers,
@@ -581,15 +622,18 @@ def run_cascade_for_db(conn, db_name, db_path, db_kind, stages, sources,
 
 
 def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
-                protein_stages=("hmmer", "bath"), n_workers=4,
+                protein_stages=DEFAULT_STAGES, n_workers=4,
                 reject_floors=None, compat_rounding=False,
                 compat_voting=False, aa_fasta=None, mask_stops=False,
-                min_clade_delta=0.0):
+                min_clade_delta=0.0, seq_type="nucl"):
     """Run the cascade for every database. Returns {db_name: [results]}.
 
-    Databases are searched independently and reconciled by the caller, exactly
-    as the single-engine path does -- this function replaces the per-database
-    search+classify loop, not the cross-database logic after it.
+    Databases are searched independently and reconciled by the caller -- this
+    function is the whole search+classify half of a `sequences` run, and the
+    cross-database logic after it is unchanged.
+
+    seq_type="prot" means the input is already amino acid: no translation, no
+    nucleotide-reading engine, and no DNA profile database.
     """
     # Pinned once, from the whole input, and reused by every stage of every
     # database. Without this a stage's E-values improve as upstream stages
@@ -601,12 +645,16 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
     log.info("Search space pinned at %.3f Mb (%d sequences)",
              search_space_mb, len(all_names))
 
-    # The translated FASTA is shared by every AA-reading engine across every
-    # database, so it is built once and subset per stage rather than
-    # regenerated. Only built if some stage actually needs it.
-    sources = {"nucl": input_fasta, "aa": aa_fasta}
-    needs_aa = any(ENGINES[n].input_kind == "aa" for n in protein_stages
-                   if n in ENGINES) and any(
+    protein_stages = stages_for_input(protein_stages, seq_type)
+
+    # Every source is built once for the whole run and subset per stage, never
+    # regenerated. Protein input already is what the AA engines read, so it is
+    # its own "aa" source and there is no nucleotide source at all.
+    sources = {"nucl": None if seq_type == "prot" else input_fasta,
+               "aa": input_fasta if seq_type == "prot" else aa_fasta,
+               "aa_nostop": None}
+    kinds = {ENGINES[n].input_kind for n in protein_stages if n in ENGINES}
+    needs_aa = bool(kinds & {"aa", "aa_nostop"}) and any(
         a == AMINO_ALPHABET for a in db_alphabets.values())
     if needs_aa and not sources["aa"]:
         sources["aa"] = os.path.join(outdir, "cascade_input.aa")
@@ -614,12 +662,30 @@ def run_cascade(conn, input_fasta, db_paths, db_alphabets, outdir,
                  " (stops masked as X)" if mask_stops else "")
         translate_fasta(input_fasta, sources["aa"], mask_stops=mask_stops)
 
+    # nail's stop-free targets, prepared once for the run rather than once per
+    # database. The rewrite is a full copy of the translation -- minutes on a
+    # large library -- and every nail stage of every database would otherwise
+    # redo it. Under --mask-stops the shared translation already says X, so
+    # this is the same file and nothing is written.
+    if needs_aa and "aa_nostop" in kinds:
+        if mask_stops:
+            sources["aa_nostop"] = sources["aa"]
+        else:
+            sources["aa_nostop"], _ = nail_search.prepare_targets(
+                sources["aa"],
+                os.path.join(outdir, "cascade_input.nostop.aa"))
+
     per_db = {}
     timing = []
     for db_name, db_path in db_paths.items():
         is_dna = db_alphabets[db_name] == DNA_ALPHABET
+        if is_dna and seq_type == "prot":
+            log.warning("  Skipping %s: nhmmer is the only engine that reads "
+                        "a DNA profile and it needs nucleotide input",
+                        db_name)
+            continue
         names = DNA_STAGES if is_dna else protein_stages
-        stages = build_stages(names, mask_stops=mask_stops)
+        stages = build_stages(names)
 
         # External tools are hard dependencies only if a stage uses them.
         if any(s.name == "bath" for s in stages):
@@ -706,12 +772,12 @@ def main(argv=None):
                    help="Output directory [default: {input}.TEsorter2]")
     p.add_argument("--prefix", default=None, help="Output file prefix")
     p.add_argument("--db-dir", default=None, help="HMM database directory")
-    p.add_argument("--stages", default="hmmer,bath",
+    p.add_argument("--stages", default=",".join(DEFAULT_STAGES),
                    help="Ordered protein-engine cascade, comma separated "
                         "(known: %s). DNA databases always use nhmmer, the "
-                        "only engine that reads DNA profiles. "
-                        "[default: hmmer,bath]"
-                        % ", ".join(sorted(ENGINES)))
+                        "only engine that reads DNA profiles. [default: %s]"
+                        % (", ".join(sorted(ENGINES)),
+                           ",".join(DEFAULT_STAGES)))
     p.add_argument("-p", "--processors", type=int, default=4)
     p.add_argument(
         "--reject-floor", default=None,

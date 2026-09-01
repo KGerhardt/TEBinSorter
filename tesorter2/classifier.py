@@ -87,6 +87,7 @@ DB_CONFIGS = {
     "line": LINE_CONFIG,
     "tir": TIR_CONFIG,
     "sine": SINE_CONFIG,
+    "sine-animals": SINE_CONFIG,
     "sine-so": SINE_CONFIG,
 }
 
@@ -800,8 +801,32 @@ def export_classification_tsv(results, out_path, include_secondary=False,
             f.write("\t".join(line) + "\n")
 
 
-def _scope_aware_superfamily(pool, weighted_winner, scope):
+# A superfamily a database could not resolve. Not a competing claim -- the
+# absence of one -- so it does not enter the vote against a database that named
+# something. See _scope_aware_superfamily.
+UNRESOLVED_SUPERFAMILY = {"unknown", "none", "na", "n/a", ".", "-", ""}
+
+
+def _scope_aware_superfamily(pool, weighted_winner, scope,
+                             unknown_competes=False):
     """Pick the winning (harmonized) superfamily with scope-aware deferral.
+
+    **An unresolved superfamily does not compete with a named one.** REXdb
+    carries one catch-all model per non-LTR order, so a LINE element it detects
+    comes back ``LINE/unknown`` -- a claim about the order with no claim about
+    the superfamily. Scored against the LINE database's ``LINE/L1``, REXdb's
+    deeper domain coverage wins the summed-score vote and the element loses its
+    superfamily entirely. On RepBase 31.07 that is 8,123 of the 8,264 sequences
+    where the reconciled superfamily disagreed with the curated label, and it
+    only happens in multi-database runs -- the default. The scope rule below was
+    meant to catch exactly this, but `resolves()` returns False for any
+    (db, superfamily) missing from clade_scope.tsv, which has rows for gydb and
+    rexdb only, so neither side ever qualified and it fell through to score.
+
+    Dropping unresolved entrants is done before the vote, so it applies to the
+    plain score fallback too. If every entrant is unresolved, they all stay and
+    the answer is unresolved, which is correct. Pass unknown_competes=True to
+    restore the previous behaviour.
 
     Generalizes the paper's two-database superfamily fusion to N databases and
     reduces to it exactly for two. When the databases disagree on superfamily,
@@ -812,6 +837,13 @@ def _scope_aware_superfamily(pool, weighted_winner, scope):
     different call is informative). If exactly one superfamily qualifies, it
     wins; otherwise fall back to the plain summed-score vote (``base``).
     """
+    if not unknown_competes:
+        named = [e for e in pool
+                 if str(e[2]["superfamily"]).strip().lower()
+                 not in UNRESOLVED_SUPERFAMILY]
+        if named:
+            pool = named
+
     sfs = {e[2]["superfamily"] for e in pool}
     base = weighted_winner(pool, "superfamily")
     if len(sfs) == 1:
@@ -831,7 +863,8 @@ def _scope_aware_superfamily(pool, weighted_winner, scope):
     return qualifiers.pop() if len(qualifiers) == 1 else base
 
 
-def reconcile_classifications(per_db_results, harmonization=None, scope=None):
+def reconcile_classifications(per_db_results, harmonization=None, scope=None,
+                              unknown_competes=False):
     """Reconcile per-database classifications via hierarchical weighted vote.
 
     For each sequence classified by multiple databases, vote at each taxonomic
@@ -915,7 +948,8 @@ def reconcile_classifications(per_db_results, harmonization=None, scope=None):
         pool = annotated
         for level in ("order", "superfamily", "clade"):
             if level == "superfamily" and multi_db:
-                winner = _scope_aware_superfamily(pool, weighted_winner, scope)
+                winner = _scope_aware_superfamily(pool, weighted_winner, scope,
+                                                unknown_competes=unknown_competes)
             else:
                 winner = weighted_winner(pool, level)
             pool = [e for e in pool if e[2][level] == winner]

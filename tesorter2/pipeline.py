@@ -1,8 +1,13 @@
 """
 Main pipeline for TE classification.
 
-Orchestrates: FASTA ingestion -> alphabet detection -> optional translation
--> HMM search -> classification -> BLAST pass-2 -> SQLite + TSV output.
+Orchestrates: FASTA ingestion -> alphabet detection -> the staged search
+cascade (hierarchical_search) -> cross-database reconciliation -> BLAST pass-2
+-> SQLite + TSV output.
+
+Engine selection lives entirely in --stages. There is no second way in: the
+cascade runs for every `sequences` run, and a single-engine run is the stage
+list with one name in it.
 """
 
 import argparse
@@ -12,17 +17,14 @@ import sys
 import time
 
 from .paths import get_db_dir
-from .hmm import peek_alphabet, needs_translation, load_hmms, AMINO_ALPHABET, DNA_ALPHABET
-from .search import build_sequence_block, legacy_search, legacy_search_nucl
-from .sequence import translate_fasta, open_input
-from .results import (create_db, store_sequences, store_legacy,
+from .hmm import peek_alphabet, AMINO_ALPHABET
+from .sequence import open_input, looks_nucleotide
+from .results import (create_db, store_sequences,
                      index_hits_tables, finalize_db)
-from .classifier import (classify_sequences, export_classification_tsv,
-                       store_classifications, reconcile_classifications,
-                       DB_CONFIGS)
+from .classifier import (export_classification_tsv, store_classifications,
+                       reconcile_classifications)
 from .blast_pass2 import blast_pass2
-from .hierarchical_search import ENGINES
-from . import bath_search
+from .hierarchical_search import ENGINES, DEFAULT_STAGES
 
 
 logging.basicConfig(
@@ -41,6 +43,12 @@ DB_ALIASES = {
     "line":     "Kapitonov_et_al.GENE.LINE.hmm",
     "tir":      "Yuan_and_Wessler.PNAS.TIR.hmm",
     "sine":     "AnnoSINE_core.hmm",
+    # AnnoSINE ships plant models; AnnoSINE v2 adds a separate animal set, and
+    # RepBase's SINEs are ~68% animal. Kept as its own database rather than
+    # merged into AnnoSINE_core.hmm so the plant and animal model sets stay
+    # separable, and because a user searching plant genomes should be able to
+    # drop it. On by default, like every alias except sine-so.
+    "sine-animals": "AnnoSINE_animals.hmm",
     "sine-so":  "SINE_SO.hmm",
 }
 
@@ -117,24 +125,21 @@ def parse_args(argv=None):
                     "database classified.")
     _add_shared(seq)
     seq.add_argument(
-        "--stages", default=None,
-        help="Run the staged search cascade over amino-acid databases instead "
-             "of a single engine: an ordered, comma-separated engine list "
-             f"({', '.join(sorted(k for k in ENGINES if k != 'nhmmer'))}). "
+        "-st", "--seq-type", choices=("nucl", "prot"), default="nucl",
+        help="Alphabet of the input sequences. 'prot' takes amino acids "
+             "directly: no six-frame translation, no nucleotide-reading engine "
+             "(BATH), and DNA profile databases are skipped since nothing can "
+             "search them. [default: nucl]")
+    seq.add_argument(
+        "--stages", default=",".join(DEFAULT_STAGES),
+        help="Ordered, comma-separated engine cascade for amino-acid "
+             f"databases ({', '.join(sorted(k for k in ENGINES if k != 'nhmmer'))}). "
              "Each stage searches only what earlier stages left unresolved, "
-             "per database. DNA databases always use nhmmer, the only engine "
-             "that reads DNA profiles. e.g. --stages nail,hmmer,bath. "
-             "A cascade containing nail also requires --mask-stops.")
-    seq.add_argument("--bath", action="store_true", default=False,
-                     help="Use BATH (frameshift-aware translated nucleotide "
-                          "search) instead of hmmer for amino-acid databases. "
-                          "Set BATH_BIN_DIR if bathsearch/bathconvert are not "
-                          "on PATH.")
-    seq.add_argument("--dna-engine", choices=("nhmmer", "hmmsearch"),
-                     default="nhmmer",
-                     help="Engine for DNA databases. nhmmer scans both strands "
-                          "and handles long targets; hmmsearch scores only the "
-                          "strand it is given. [default: nhmmer]")
+             "per database, so a fast engine strips the easy majority and the "
+             "sensitive ones see a shrinking remainder. One name runs that "
+             "engine alone -- this is the only way to choose an engine. DNA "
+             "databases always use nhmmer, the only engine that reads DNA "
+             f"profiles. [default: {','.join(DEFAULT_STAGES)}]")
     seq.add_argument("--compat-tesorter-voting", action="store_true",
                      default=False,
                      help="Decide the clade by raw domain-count plurality, "
@@ -175,15 +180,6 @@ def parse_args(argv=None):
         help="Append a CladeDelta column to the per-database .cls.tsv with "
              "that margin in bits ('inf' = only one clade in play). "
              "Diagnostic only; does not change any call.")
-    seq.add_argument("--emit-bath", action="store_true", default=False,
-                     help="Emit routed FASTA partitions for BATH to "
-                          "{outdir}/BATHwater/.")
-    # Deprecated, hidden
-    for dep in ("--quick", "--iterative", "--two-pass", "--pass-1-only"):
-        seq.add_argument(dep, action="store_true", default=False,
-                         help=argparse.SUPPRESS)
-    seq.add_argument("--F1", type=float, default=0.02, help=argparse.SUPPRESS)
-
     # ---- tesorter2 genome ----
     gen = sub.add_parser(
         "genome", help="Annotate TE domains across a whole assembly",
@@ -223,117 +219,10 @@ def _normalize_argv(argv):
     return ["sequences"] + argv
 
 
-def run_database_legacy(db_path, seq_block, db_name, conn, alphabet=None,
-                        dna_engine="nhmmer", n_workers=0):
-    """
-    Exhaustive single-pass nobias search against all models.
-
-    DNA-alphabet databases go through nhmmer, which scans both strands;
-    amino-acid databases go through hmmsearch. Pass dna_engine="hmmsearch" to
-    force the old single-strand behaviour on DNA databases.
-
-    Hits go to legacy_hits, which is now the only hits table.
-    """
-    log.info(f"Loading HMMs from {db_name}")
-    t0 = time.time()
-    hmms = load_hmms(db_path)
-    use_nhmmer = alphabet == DNA_ALPHABET and dna_engine == "nhmmer"
-    optimized = None
-    if not use_nhmmer:
-        # nhmmer's pipeline builds its own profiles; optimizing here would be
-        # wasted work.
-        from .hmm import build_optimized_profiles
-        optimized = build_optimized_profiles(hmms, alphabet=alphabet)
-    t1 = time.time()
-    log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
-
-    t2 = time.time()
-    if use_nhmmer:
-        log.info(f"  nhmmer search: bias filter OFF, both strands, all models")
-        hits = legacy_search_nucl(hmms, seq_block, n_workers=n_workers)
-    else:
-        log.info(f"  Legacy search: bias filter OFF, all models, all sequences")
-        hits = legacy_search(hmms, seq_block, optimized=optimized)
-    t3 = time.time()
-    log.info(f"  {len(hits)} hits in {t3 - t2:.1f}s")
-
-    store_legacy(conn, hits, db_name)
-    return len(hits)
-
-
-def run_database(db_path, seq_block, seq_fasta, db_name, alphabet, conn,
-                 pass1_only=False, n_workers=4, F1=0.02):
-    """
-    Run the two-pass search for a single database.
-
-    Args:
-        db_path: path to HMM database file
-        seq_block: DigitalSequenceBlock (amino or nucl as appropriate)
-        seq_fasta: path to the FASTA file (for parallel worker init)
-        db_name: short name for this database (for tagging results)
-        alphabet: easel.Alphabet for this database
-        conn: sqlite3 connection for storing results
-        pass1_only: if True, skip pass 2
-        n_workers: number of worker processes for pass 2
-
-    Returns:
-        tuple of (pass1_hit_count, pass2_hit_count)
-    """
-    log.info(f"Loading HMMs from {db_name}")
-    t0 = time.time()
-    hmms = load_hmms(db_path)
-    hmms_dict = {hmm.name: hmm for hmm in hmms}
-    t1 = time.time()
-    log.info(f"  Loaded {len(hmms)} models in {t1 - t0:.1f}s")
-
-    # Pass 1
-    log.info(f"  Pass 1: coarse screen (bias filter ON)")
-    t2 = time.time()
-    p1_hits, seq_models = pass1_screen(hmms, seq_block, F1=F1)
-    t3 = time.time()
-    n_seqs = len(seq_models)
-    n_pairs = sum(len(v) for v in seq_models.values())
-    log.info(f"  Pass 1: {len(p1_hits)} hits, {n_seqs} seqs with signal, "
-             f"{n_pairs} seq-model pairs in {t3 - t2:.1f}s")
-
-    store_pass1(conn, p1_hits, db_name)
-
-    if pass1_only:
-        log.info(f"  --pass-1-only: skipping pass 2 for {db_name}")
-        return len(p1_hits), 0
-
-    # Pass 2
-    needed_models = set()
-    for models in seq_models.values():
-        needed_models |= models
-    log.info(f"  Pass 2: sensitive search (bias filter OFF) on "
-             f"{len(needed_models)} models")
-
-    t4 = time.time()
-    if n_workers > 1:
-        p2_hits = pass2_search_parallel(
-            db_path, seq_fasta, seq_models, hmms_dict,
-            alphabet, n_workers=n_workers,
-        )
-    else:
-        p2_hits = pass2_search(hmms_dict, seq_block, seq_models)
-    t5 = time.time()
-    log.info(f"  Pass 2: {len(p2_hits)} hits in {t5 - t4:.1f}s")
-
-    store_pass2(conn, p2_hits, db_name)
-
-    return len(p1_hits), len(p2_hits)
-
-
 def main():
     args = parse_args()
 
     genome_mode = args.mode == "genome"
-
-    if not genome_mode and args.stages:
-        if args.two_pass or args.pass_1_only:
-            raise SystemExit(
-                "--stages is incompatible with the deprecated two-pass modes.")
 
     # Resolve output directory and prefix
     input_base = os.path.basename(args.sequence)
@@ -342,7 +231,6 @@ def main():
     os.makedirs(outdir, exist_ok=True)
 
     db_path_out = os.path.join(outdir, f"{prefix}.db")
-    aa_fasta = os.path.join(outdir, f"{prefix}.aa")
 
     # Resolve databases. Omitting -d searches everything: each database
     # classifies independently and reconciliation resolves them afterwards, so
@@ -364,18 +252,14 @@ def main():
     log.info(f"Output directory: {outdir}")
     log.info(f"File prefix: {prefix}")
 
-    # Check which alphabets we need
-    any_amino = False
-    any_nucl = False
+    # Database alphabet decides the engines: AA databases run the --stages
+    # cascade, DNA databases nhmmer.
     db_alphabets = {}
     for name, path in db_paths.items():
         alphabet = peek_alphabet(path)
         db_alphabets[name] = alphabet
-        if alphabet == AMINO_ALPHABET:
-            any_amino = True
-        else:
-            any_nucl = True
-        log.info(f"  {name}: {alphabet}, translate={'yes' if alphabet == AMINO_ALPHABET else 'no'}")
+        log.info(f"  {name}: {alphabet}, translate="
+                 f"{'yes' if alphabet == AMINO_ALPHABET else 'no'}")
 
     # Genome mode: dispatch to the domain-level genome scanner and stop here.
     # It windows the genome, finds/classifies each TE protein domain, and emits
@@ -400,175 +284,75 @@ def main():
     store_sequences(conn, nucl_lengths)
     log.info(f"Input: {len(nucl_lengths)} sequences")
 
-    # Translate if any database needs amino acid sequences. Under --bath the
-    # amino-acid databases are searched by bathsearch directly against the
-    # nucleotide input (frameshift-aware translated search), so no six-frame
-    # translation is needed for them.
-    aa_block = None
-    if any_amino and not args.bath and not args.stages:
-        # Remove stale index if present
-        for f in [aa_fasta + ".fxi"]:
-            if os.path.exists(f):
-                os.remove(f)
-        log.info("Six-frame translating input sequences%s",
-                 " (stops masked as X)" if args.mask_stops else "")
-        t0 = time.time()
-        translate_fasta(args.sequence, aa_fasta, mask_stops=args.mask_stops)
-        t1 = time.time()
-        log.info(f"  Translation done in {t1 - t0:.1f}s -> {aa_fasta}")
-        aa_block = build_sequence_block(aa_fasta, AMINO_ALPHABET)
-        log.info(f"  Built amino acid sequence block: {len(aa_block)} frames")
+    # A mismatched -st is otherwise silent: protein profiles against
+    # nucleotide letters simply find nothing, which reads as a clean run.
+    if args.seq_type == "prot" and looks_nucleotide(args.sequence):
+        log.warning("-st prot, but the input reads as nucleotide sequence. "
+                    "Drop -st prot to six-frame translate it.")
+    elif args.seq_type == "nucl" and not looks_nucleotide(args.sequence):
+        log.warning("The input does not read as nucleotide sequence. Pass "
+                    "-st prot if it is amino acid.")
 
-    # Build nucleotide block if needed
-    nucl_block = None
-    if any_nucl and not args.stages:
-        log.info("Building nucleotide sequence block")
-        nucl_block = build_sequence_block(args.sequence, DNA_ALPHABET)
-        log.info(f"  Built nucleotide sequence block: {len(nucl_block)} sequences")
+    # Protein input feeds only the amino-acid databases: nhmmer is the one
+    # engine that reads a DNA profile and it needs nucleotide sequence.
+    if args.seq_type == "prot":
+        dna_dbs = [n for n in db_names if db_alphabets[n] != AMINO_ALPHABET]
+        if dna_dbs:
+            log.warning("-st prot: skipping DNA profile database(s) %s -- "
+                        "nothing can search them with protein input",
+                        ", ".join(dna_dbs))
+            db_names = [n for n in db_names if n not in dna_dbs]
+            db_paths = {n: db_paths[n] for n in db_names}
+            db_alphabets = {n: db_alphabets[n] for n in db_names}
+        if not db_names:
+            raise SystemExit(
+                "Nothing to search: every requested database holds DNA "
+                "profiles, which protein input cannot feed.")
 
-    per_db_results = {}
+    # --- Search and classify: the staged cascade ---
+    # One cascade per database (--stages picks the engines, DNA databases
+    # always nhmmer). Everything after it -- cross-database reconciliation,
+    # BLAST pass-2, the combined export -- is shared and engine-agnostic.
+    from . import hierarchical_search
 
-    # --- Staged cascade (--stages) ---
-    # Replaces both the per-database search loop and the classification loop
-    # below; everything after them -- cross-database reconciliation, BLAST
-    # pass-2, the combined export -- is shared and runs unchanged.
-    if args.stages:
-        from . import hierarchical_search
+    per_db_results = hierarchical_search.run_cascade(
+        conn, args.sequence, db_paths, db_alphabets, outdir,
+        protein_stages=[x.strip() for x in args.stages.split(",")],
+        n_workers=args.processors,
+        compat_rounding=args.compat_tesorter_rounding,
+        compat_voting=args.compat_tesorter_voting,
+        mask_stops=args.mask_stops,
+        min_clade_delta=args.min_clade_delta,
+        seq_type=args.seq_type)
 
-        per_db_results = hierarchical_search.run_cascade(
-            conn, args.sequence, db_paths, db_alphabets, outdir,
-            protein_stages=[x.strip() for x in args.stages.split(",")],
-            n_workers=args.processors,
-            compat_rounding=args.compat_tesorter_rounding,
-            compat_voting=args.compat_tesorter_voting,
-            mask_stops=args.mask_stops,
-            min_clade_delta=getattr(args, "min_clade_delta", 0.0))
-
-        log.info("Indexing hits tables")
-        index_hits_tables(conn)
-
-        for name, results in per_db_results.items():
-            if not results:
-                continue
-            cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
-            export_classification_tsv(
-                results, cls_tsv,
-                include_clade_delta=getattr(args, "emit_clade_delta", False))
-            log.info(f"  {name}: {len(results)} classified -> {cls_tsv}")
-
-            # Companion files: the RepeatMasker library only. The domain-level
-            # files (.dom.gff3/.dom.tsv/.dom.faa, .cls.pep) encode coordinates
-            # on the six-frame translation, and a cascade's hits for one
-            # database can come from several engines -- BATH reports nucleotide
-            # coordinates, nail its own -- so there is no single frame to write
-            # them against. Same restriction --bath already carries.
-            if not args.no_tesorter_outputs:
-                from .tesorter_output import generate_all_outputs
-                generate_all_outputs(
-                    conn, os.path.join(outdir, f"{prefix}.{name}"), name,
-                    args.sequence, None, nucl_lengths, results,
-                    seq_type="nucl",
-                    no_reverse=args.no_reverse,
-                    no_library=args.no_library,
-                    hits_table="legacy_hits",
-                    domain_files=False,
-                    keep=None,
-                )
-
-    # Databases handled by the single-engine path. Empty under --stages, which
-    # has already classified everything through the cascade above.
-    single_engine_dbs = [] if args.stages else db_names
-
-    # Run each database
-    for name in single_engine_dbs:
-        path = db_paths[name]
-        alphabet = db_alphabets[name]
-
-        if alphabet == AMINO_ALPHABET:
-            seq_block = aa_block
-            seq_fasta = aa_fasta
-        else:
-            seq_block = nucl_block
-            seq_fasta = args.sequence
-
-        log.info(f"--- Searching {name} ({os.path.basename(path)}) ---")
-
-        two_pass = args.two_pass or args.pass_1_only or args.emit_bath
-
-        if args.bath and alphabet == AMINO_ALPHABET:
-            t_b0 = time.time()
-            hits = bath_search.run_and_parse(
-                path, args.sequence, name,
-                n_workers=args.processors, outdir=outdir)
-            store_legacy(conn, hits, name)
-            log.info(f"  BATH search: {len(hits)} hits in {time.time() - t_b0:.1f}s")
-        else:
-            run_database_legacy(path, seq_block, name, conn, alphabet=alphabet,
-                                dna_engine=args.dna_engine,
-                                n_workers=args.processors)
-
-    # Build hits-table indexes now that all HMM hits are written and
-    # before the classification phase starts reading from them.
     log.info("Indexing hits tables")
-    t_idx0 = time.time()
     index_hits_tables(conn)
-    log.info(f"  Indexed in {time.time() - t_idx0:.1f}s")
 
-    # --- Classification ---
-    log.info("--- Classification ---")
-    from .deconflict import load_hits
-
-    for name in single_engine_dbs:
-        config = DB_CONFIGS.get(name)
-        if config is None:
-            log.warning(f"  No classifier config for {name}, skipping")
+    for name, results in per_db_results.items():
+        if not results:
             continue
-
-        hits_table = "legacy_hits"
-        hits = load_hits(db_path_out, table=hits_table, database=name)
-        if hits is None:
-            continue
-
-        log.info(f"  Classifying {name} ({hits_table})")
-        results = classify_sequences(hits, config,
-                                     compat_rounding=args.compat_tesorter_rounding,
-                                     compat_voting=args.compat_tesorter_voting,
-                                     min_clade_delta=getattr(args, "min_clade_delta", 0.0))
-
-        # Store and export per-database classification (TEsorter format)
-        store_classifications(conn, results, database=name)
         cls_tsv = os.path.join(outdir, f"{prefix}.{name}.cls.tsv")
         export_classification_tsv(
-            results, cls_tsv,
-            include_clade_delta=getattr(args, "emit_clade_delta", False))
-        log.info(f"    {len(results)} classified -> {cls_tsv}")
+            results, cls_tsv, include_clade_delta=args.emit_clade_delta)
+        log.info(f"  {name}: {len(results)} classified -> {cls_tsv}")
 
-        # TEsorter-compatible companion files, named {prefix}.{db}.* to sit
-        # beside the per-database .cls.tsv. The domain-level files encode
-        # six-frame translated coordinates, so they are only written when this
-        # database was searched on the translated block; --bath and
-        # DNA-alphabet databases get the library alone.
-        if not args.no_tesorter_outputs and results:
-            from .tesorter_output import generate_all_outputs, domain_keys
-            from .classifier import select_domain_indices
-            six_frame = (aa_block is not None
-                         and db_alphabets[name] == AMINO_ALPHABET)
-            keep = domain_keys(hits, select_domain_indices(
-                hits, config, compat_rounding=args.compat_tesorter_rounding))
+        # Companion files: the RepeatMasker library only. The domain-level
+        # files (.dom.gff3/.dom.tsv/.dom.faa, .cls.pep) encode coordinates on
+        # the six-frame translation, and a cascade's hits for one database can
+        # come from several engines -- BATH reports nucleotide coordinates,
+        # nail its own -- so there is no single frame to write them against.
+        if not args.no_tesorter_outputs:
+            from .tesorter_output import generate_all_outputs
             generate_all_outputs(
                 conn, os.path.join(outdir, f"{prefix}.{name}"), name,
-                args.sequence,
-                aa_fasta if six_frame else None,
-                nucl_lengths, results,
-                seq_type="nucl",
+                args.sequence, None, nucl_lengths, results,
+                seq_type=args.seq_type,
                 no_reverse=args.no_reverse,
                 no_library=args.no_library,
-                hits_table=hits_table,
-                domain_files=six_frame,
-                keep=keep,
+                hits_table="legacy_hits",
+                domain_files=False,
+                keep=None,
             )
-
-        per_db_results[name] = results
 
     # Reconcile across databases via hierarchical weighted vote
     reconciled = reconcile_classifications(per_db_results)
@@ -578,12 +362,12 @@ def main():
 
     # --- BLAST pass-2 ---
     all_results = list(reconciled)
-    if not args.pass_1_only and all_classifications:
+    if all_classifications:
         log.info("--- BLAST pass-2 ---")
         blast_cls = blast_pass2(
             args.sequence, conn,
             hmm_classifications=all_classifications,
-            seq_type="nucl",
+            seq_type=args.seq_type,
             n_processors=args.processors,
             outdir=outdir,
         )

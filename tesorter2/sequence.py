@@ -48,6 +48,32 @@ def open_input(fasta_path):
     return pyfastx.Fasta(fasta_path, build_index=True)
 
 
+# Everything a nucleotide FASTA is allowed to contain: the four bases, U for
+# RNA, the ambiguity codes, gaps. Protein sequence overlaps this alphabet
+# (A, C, G, T and N are all amino acids), so the test has to be a proportion
+# rather than a membership check.
+_NUCL_CHARS = set("ACGTUNRYSWKMBDHVacgtunryswkmbdhv-.")
+
+
+def looks_nucleotide(fasta_path, n_records=20, threshold=0.9):
+    """Whether the first records read as nucleotide rather than amino acid.
+
+    Sampled, not exhaustive -- enough to catch an input whose alphabet does not
+    match what --seq-type says, which is otherwise silent: protein profiles
+    score nothing against nucleotide letters, so the run looks clean and simply
+    classifies nothing.
+    """
+    fa = open_input(fasta_path)
+    total = nucl = 0
+    for i, rec in enumerate(fa):
+        if i >= n_records:
+            break
+        seq = str(rec.seq)[:10000]
+        total += len(seq)
+        nucl += sum(1 for c in seq if c in _NUCL_CHARS)
+    return total > 0 and nucl / total > threshold
+
+
 def get_sequence_metadata(fasta_path):
     """
     Retrieve sequence metadata from the pyfastx SQLite index.
