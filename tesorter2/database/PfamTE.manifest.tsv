@@ -1,0 +1,148 @@
+tesorter2_name	pfam_id	pfam_acc	order	superfamily	clade	gene	n_repbase_hits	confidence	description
+Class_I/LINE/L1:L1-Tnp_22_dsRBD	Tnp_22_dsRBD	PF17490.8	LINE	L1	L1	Tnp_22_dsRBD	261	OK-evidence	L1 transposable element dsRBD-like domain  [245/261 hits are LINE; commonest type L1 x245]
+Class_I/LINE/L1:L1-Tnp_22_trimer	Tnp_22_trimer	PF17489.8	LINE	L1	L1	Tnp_22_trimer	38	OK-evidence	L1 transposable element trimerization domain  [36/38 hits are LINE; commonest type L1 x36]
+Class_I/LINE/L1:L1-Transposase_22	Transposase_22	PF02994.21	LINE	L1	L1	Transposase_22	262	OK-evidence	L1 transposable element RBD-like domain  [248/262 hits are LINE; commonest type L1 x248]
+Class_I/LTR/Retroviridae:Retroviridae-ENV	GP41	PF00517.23	LTR	Retroviridae	Retroviridae	ENV	9	OK-evidence	Retroviral envelope protein  [9/9 hits are LTR; commonest type ERV2 x8]
+Class_I/LTR/Retroviridae:Retroviridae-Gag_p10	Gag_p10	PF02337.23	LTR	Retroviridae	Retroviridae	Gag_p10	18	OK-evidence	Retroviral GAG p10 protein  [18/18 hits are LTR; commonest type ERV2 x18]
+Class_I/LTR/Retroviridae:Retroviridae-Gag_p30	Gag_p30	PF02093.21	LTR	Retroviridae	Retroviridae	Gag_p30	10	OK-evidence	Gag P30 core shell protein  [10/10 hits are LTR; commonest type ERV1 x10]
+Class_I/LTR/Retroviridae:Retroviridae-INT	IN_DBD_C	PF00552.28	LTR	Retroviridae	Retroviridae	INT	9	OK-evidence	Integrase DNA binding domain  [9/9 hits are LTR; commonest type ERV2 x9]
+Class_I/LTR/Retrovirus:Retrovirus-GAGBD	GAGBD	PF16828.11	LTR	Retrovirus	Retrovirus	GAGBD	0	REVIEW	GAG-binding domain on surface antigen
+Class_I/LTR/Retrovirus:Retrovirus-Gag_FV_central	Gag_FV_central	PF20672.4	LTR	Retrovirus	Retrovirus	Gag_FV_central	0	REVIEW	Spumavirus Gag polyprotein, conserved central domain
+Class_I/LTR/Retrovirus:Retrovirus-Gag_p12	Gag_p12	PF01141.24	LTR	Retrovirus	Retrovirus	Gag_p12	0	REVIEW	Gag polyprotein, inner coat protein p12
+Class_I/LTR/Retrovirus:Retrovirus-Gag_p15	Gag_p15	PF08723.15	LTR	Retrovirus	Retrovirus	Gag_p15	0	REVIEW	Gag protein p15
+Class_I/LTR/Retrovirus:Retrovirus-Gag_p17	Gag_p17	PF00540.24	LTR	Retrovirus	Retrovirus	Gag_p17	0	REVIEW	gag gene protein p17 (matrix protein)
+Class_I/LTR/Retrovirus:Retrovirus-Gag_p24	Gag_p24	PF00607.26	LTR	Retrovirus	Retrovirus	Gag_p24	4	REVIEW	gag protein p24 N-terminal domain
+Class_I/LTR/Retrovirus:Retrovirus-Gag_p24_C	Gag_p24_C	PF19317.5	LTR	Retrovirus	Retrovirus	Gag_p24_C	0	REVIEW	Gag protein p24 C-terminal domain
+Class_I/LTR/Retrovirus:Retrovirus-Gag_p6	Gag_p6	PF08705.17	LTR	Retrovirus	Retrovirus	Gag_p6	0	REVIEW	Gag protein p6
+Class_I/LTR/Retrovirus:Retrovirus-Gag_spuma_C	Gag_spuma_C	PF20673.3	LTR	Retrovirus	Retrovirus	Gag_spuma_C	0	REVIEW	Spumavirus Gag polyprotein, C-terminal
+Class_I/LTR/Retrovirus:Retrovirus-Gag_spuma_N	Gag_spuma_N	PF03276.20	LTR	Retrovirus	Retrovirus	Gag_spuma_N	0	REVIEW	Spumavirus gag protein, N-terminal
+Class_I/LTR/Retrovirus:Retrovirus-INT	gag_pre-integrs	PF13976.12	LTR	Retrovirus	Retrovirus	INT	1	REVIEW	GAG-pre-integrase domain
+Class_I/LTR/Retrovirus:Retrovirus-Retrotran_gag_2	Retrotran_gag_2	PF14223.14	LTR	Retrovirus	Retrovirus	Retrotran_gag_2	0	REVIEW	gag-polypeptide of LTR copia-type
+Class_I/LTR/Retrovirus:Retrovirus-Retrotran_gag_3	Retrotran_gag_3	PF14244.13	LTR	Retrovirus	Retrovirus	Retrotran_gag_3	0	REVIEW	gag-polypeptide of LTR copia-type
+Class_I/LTR/Retrovirus:Retrovirus-Retrotran_gag_4	Retrotran_gag_4	PF17241.9	LTR	Retrovirus	Retrovirus	Retrotran_gag_4	0	REVIEW	Ty5 Gag N-terminal region
+Class_I/LTR/Retrovirus:Retrovirus-Retrotrans_gag	Retrotrans_gag	PF03732.24	LTR	Retrovirus	Retrovirus	Retrotrans_gag	0	REVIEW	Retrotransposon gag protein
+Class_I/LTR/Retrovirus:Retrovirus-gag_asp_proteas	gag-asp_proteas	PF13975.12	LTR	Retrovirus	Retrovirus	gag_asp_proteas	0	REVIEW	gag-polyprotein putative aspartyl protease
+Class_I/LTR/Retrovirus:Retrovirus-zf_CCHC_5	zf-CCHC_5	PF14787.12	LTR	Retrovirus	Retrovirus	zf_CCHC_5	3	REVIEW	GAG-polyprotein viral zinc-finger
+Class_I/LTR/unknown:LTR-Arm_DNA_bind_1	Arm-DNA-bind_1	PF09003.17	LTR	unknown	LTR	Arm_DNA_bind_1	0	REVIEW	Bacteriophage lambda integrase, Arm DNA-binding domain
+Class_I/LTR/unknown:LTR-DUF3701	DUF3701	PF12482.15	LTR	unknown	LTR	DUF3701	0	REVIEW	Phage integrase protein
+Class_I/LTR/unknown:LTR-Exo_endo_phos_2	Exo_endo_phos_2	PF14529.13	LTR	unknown	LTR	Exo_endo_phos_2	0	REVIEW	Endonuclease-reverse transcriptase
+Class_I/LTR/unknown:LTR-Exu_RNase_H_like	Exu_RNase_H_like	PF22123.3	LTR	unknown	LTR	Exu_RNase_H_like	3	REVIEW	Exuperantia RNAse H-like domain
+Class_I/LTR/unknown:LTR-INT_rpt	INT_rpt	PF14882.12	LTR	unknown	LTR	INT_rpt	0	REVIEW	Integrase repeat unit
+Class_I/LTR/unknown:LTR-Int_N	Int_N	PF24624.2	LTR	unknown	LTR	Int_N	0	REVIEW	Phage integrase, N-terminal domain
+Class_I/LTR/unknown:LTR-Integrase_1	Integrase_1	PF12835.13	LTR	unknown	LTR	Integrase_1	0	REVIEW	Integrase
+Class_I/LTR/unknown:LTR-Integrase_2	Integrase_2	PF13009.12	LTR	unknown	LTR	Integrase_2	0	REVIEW	Putative integrase
+Class_I/LTR/unknown:LTR-Integrase_DNA	Integrase_DNA	PF02920.22	LTR	unknown	LTR	Integrase_DNA	0	REVIEW	DNA binding domain of tn916 integrase
+Class_I/LTR/unknown:LTR-Integrase_H2C2	Integrase_H2C2	PF17921.8	LTR	unknown	LTR	Integrase_H2C2	0	REVIEW	Integrase zinc binding domain
+Class_I/LTR/unknown:LTR-Integrase_N_phage	Integrase_N_phage	PF26003.1	LTR	unknown	LTR	Integrase_N_phage	0	REVIEW	Phage integrase, N-terminal domain
+Class_I/LTR/unknown:LTR-Integrase_Zn	Integrase_Zn	PF02022.26	LTR	unknown	LTR	Integrase_Zn	0	REVIEW	Integrase Zinc binding domain
+Class_I/LTR/unknown:LTR-Integrase_p58_C	Integrase_p58_C	PF22938.3	LTR	unknown	LTR	Integrase_p58_C	0	REVIEW	Integrase p58, C-terminal domain
+Class_I/LTR/unknown:LTR-MLVIN_C	MLVIN_C	PF18697.8	LTR	unknown	LTR	MLVIN_C	3	REVIEW	Murine leukemia virus (MLV) integrase (IN) C-terminal domain
+Class_I/LTR/unknown:LTR-Mycovirus_RNAse	Mycovirus_RNAse	PF20614.4	LTR	unknown	LTR	Mycovirus_RNAse	0	REVIEW	Homologues of viral RNAse III, found in viruses infecting fungi
+Class_I/LTR/unknown:LTR-Phage_int_M	Phage_int_M	PF22022.3	LTR	unknown	LTR	Phage_int_M	0	REVIEW	Phage integrase central domain
+Class_I/LTR/unknown:LTR-Phage_int_SAM_1	Phage_int_SAM_1	PF02899.24	LTR	unknown	LTR	Phage_int_SAM_1	0	REVIEW	Phage integrase, N-terminal SAM-like domain
+Class_I/LTR/unknown:LTR-Phage_int_SAM_2	Phage_int_SAM_2	PF12834.14	LTR	unknown	LTR	Phage_int_SAM_2	0	REVIEW	Phage integrase, N-terminal
+Class_I/LTR/unknown:LTR-Phage_int_SAM_3	Phage_int_SAM_3	PF14659.13	LTR	unknown	LTR	Phage_int_SAM_3	0	REVIEW	Phage integrase, N-terminal SAM-like domain
+Class_I/LTR/unknown:LTR-Phage_int_SAM_4	Phage_int_SAM_4	PF13495.13	LTR	unknown	LTR	Phage_int_SAM_4	2	REVIEW	Phage integrase, N-terminal SAM-like domain
+Class_I/LTR/unknown:LTR-Phage_int_SAM_5	Phage_int_SAM_5	PF13102.13	LTR	unknown	LTR	Phage_int_SAM_5	0	REVIEW	Phage integrase SAM-like domain
+Class_I/LTR/unknown:LTR-Phage_int_SAM_6	Phage_int_SAM_6	PF18644.8	LTR	unknown	LTR	Phage_int_SAM_6	0	REVIEW	Phage integrase SAM-like domain
+Class_I/LTR/unknown:LTR-Phage_integr_3	Phage_integr_3	PF16795.11	LTR	unknown	LTR	Phage_integr_3	0	REVIEW	Archaeal phage integrase
+Class_I/LTR/unknown:LTR-RAG1_RNase_H	RAG1_RNase_H	PF26100.1	LTR	unknown	LTR	RAG1_RNase_H	1	REVIEW	Recombination-activation protein 1 (RAG1) RNase H domain
+Class_I/LTR/unknown:LTR-RAG1_pre_RNase_H	RAG1_pre-RNase_H	PF26025.1	LTR	unknown	LTR	RAG1_pre_RNase_H	1	REVIEW	Recombination-activation protein 1 (RAG1) pre-RNase H domain
+Class_I/LTR/unknown:LTR-RNaseH_C	RNaseH_C	PF09293.16	LTR	unknown	LTR	RNaseH_C	0	REVIEW	T4 RNase H, C terminal
+Class_I/LTR/unknown:LTR-RNase_H	RNase_H	PF00075.31	LTR	unknown	LTR	RNase_H	0	REVIEW	RNase H
+Class_I/LTR/unknown:LTR-RNase_H2_Ydr279	RNase_H2-Ydr279	PF09468.17	LTR	unknown	LTR	RNase_H2_Ydr279	0	REVIEW	Ydr279p protein family (RNase H2 complex component) wHTH domain
+Class_I/LTR/unknown:LTR-RT_RNaseH	RT_RNaseH	PF17917.8	LTR	unknown	LTR	RT_RNaseH	0	REVIEW	RNase H-like domain found in reverse transcriptase
+Class_I/LTR/unknown:LTR-RT_RNaseH_2	RT_RNaseH_2	PF17919.8	LTR	unknown	LTR	RT_RNaseH_2	0	REVIEW	RNase H-like domain found in reverse transcriptase
+Class_I/LTR/unknown:LTR-RVT_1	RVT_1	PF00078.33	LTR	unknown	LTR	RVT_1	2	REVIEW	Reverse transcriptase (RNA-dependent DNA polymerase)
+Class_I/LTR/unknown:LTR-RVT_2	RVT_2	PF07727.20	LTR	unknown	LTR	RVT_2	1	REVIEW	Reverse transcriptase (RNA-dependent DNA polymerase)
+Class_I/LTR/unknown:LTR-RVT_3	RVT_3	PF13456.13	LTR	unknown	LTR	RVT_3	2	REVIEW	Reverse transcriptase-like
+Class_I/LTR/unknown:LTR-RVT_N	RVT_N	PF13655.12	LTR	unknown	LTR	RVT_N	0	REVIEW	N-terminal domain of reverse transcriptase
+Class_I/LTR/unknown:LTR-RVT_connect	RVT_connect	PF06815.19	LTR	unknown	LTR	RVT_connect	0	REVIEW	Reverse transcriptase connection domain
+Class_I/LTR/unknown:LTR-RVT_thumb	RVT_thumb	PF06817.20	LTR	unknown	LTR	RVT_thumb	0	REVIEW	Reverse transcriptase thumb domain
+Class_I/LTR/unknown:LTR-SH3_11	SH3_11	PF18103.8	LTR	unknown	LTR	SH3_11	0	REVIEW	Retroviral integrase C-terminal SH3 domain
+Class_I/LTR/unknown:LTR-TNP_like_RNaseH_N	TNP-like_RNaseH_N	PF21787.4	LTR	unknown	LTR	TNP_like_RNaseH_N	2	REVIEW	TNP-like, RNase H N-terminal domain
+Class_I/LTR/unknown:LTR-UvrC_RNaseH_dom	UvrC_RNaseH_dom	PF08459.18	LTR	unknown	LTR	UvrC_RNaseH_dom	0	REVIEW	UvrC RNAse H endonuclease domain
+Class_I/LTR/unknown:LTR-rva_4	rva_4	PF24764.2	LTR	unknown	LTR	rva_4	75	REVIEW	Integrase core domain
+Class_I/LTR/unknown:LTR-rve	rve	PF00665.33	LTR	unknown	LTR	rve	16	REVIEW	Integrase core domain
+Class_I/LTR/unknown:LTR-rve_2	rve_2	PF13333.13	LTR	unknown	LTR	rve_2	0	REVIEW	Integrase core domain
+Class_I/LTR/unknown:LTR-rve_3	rve_3	PF13683.13	LTR	unknown	LTR	rve_3	0	REVIEW	Integrase core domain
+Class_I/LTR/unknown:LTR-zf_RVT	zf-RVT	PF13966.12	LTR	unknown	LTR	zf_RVT	36	REVIEW	zinc-binding in reverse transcriptase
+Class_II/DNA/Crypton/unknown:Crypton-INT	Phage_integrase	PF00589.28	Crypton	unknown	Crypton	INT	74	OK-evidence	Phage integrase family  [72/74 hits are Crypton; commonest type CryptonA x28]
+Class_II/DNA/Helitron/unknown:Helitron-Rep	Helitron_like_N	PF14214.12	Helitron	unknown	Helitron	Rep	5	OK-evidence	Helitron helicase-like domain at N-terminus  [5/5 hits are Helitron; commonest type Helitron x5]
+Class_II/DNA/TIR/EnSpm_CACTA:EnSpm_CACTA-Transpos_assoc	Transpos_assoc	PF13963.12	TIR	EnSpm_CACTA	EnSpm_CACTA	Transpos_assoc	5	OK-evidence	Transposase-associated domain  [5/5 hits are TIR; commonest type EnSpm/CACTA x5]
+Class_II/DNA/TIR/EnSpm_CACTA:EnSpm_CACTA-Transposase_23	Transposase_23	PF03017.19	TIR	EnSpm_CACTA	EnSpm_CACTA	Transposase_23	1	OK	TNP1/EN/SPM transposase
+Class_II/DNA/TIR/EnSpm_CACTA:EnSpm_CACTA-Transposase_24	Transposase_24	PF03004.20	TIR	EnSpm_CACTA	EnSpm_CACTA	Transposase_24	16	OK-evidence	Plant transposase (Ptta/En/Spm family)  [16/16 hits are TIR; commonest type EnSpm/CACTA x16]
+Class_II/DNA/TIR/EnSpm_CACTA:Plavaka-TPase	Plavaka	PF18759.8	TIR	EnSpm_CACTA	Plavaka	TPase	86	OK-evidence	Plavaka transposase  [86/86 hits are TIR; commonest type EnSpm/CACTA x86]
+Class_II/DNA/TIR/Kolobok:Mutator-TPase	Mutator	PF20700.4	TIR	Kolobok	Mutator	TPase	53	OK-evidence	Mutator-like transposase  [53/53 hits are TIR; commonest type Kolobok x53]
+Class_II/DNA/TIR/MuDR_Mutator:MuDR_Mutator-MULE	MULE	PF10551.16	TIR	MuDR_Mutator	MuDR_Mutator	MULE	0	OK	MULE transposase domain
+Class_II/DNA/TIR/MuDR_Mutator:MuDR_Mutator-Transposase_mut	Transposase_mut	PF00872.25	TIR	MuDR_Mutator	MuDR_Mutator	Transposase_mut	0	OK	Transposase, Mutator family
+Class_II/DNA/TIR/P:P-RH	TNP-like_RNaseH_C	PF21789.4	TIR	P	P	RH	5	OK-evidence	TNP-like, RNase H C-terminal domain  [5/5 hits are TIR; commonest type P x5]
+Class_II/DNA/TIR/Tc1_Mariner:Tc1_Mariner-DDE_1	DDE_1	PF03184.26	TIR	Tc1_Mariner	Tc1_Mariner	DDE_1	9	OK-evidence	DDE superfamily endonuclease  [9/9 hits are TIR; commonest type Mariner/Tc1 x9]
+Class_II/DNA/TIR/Tc1_Mariner:Tc1_Mariner-DDE_3	DDE_3	PF13358.13	TIR	Tc1_Mariner	Tc1_Mariner	DDE_3	55	OK-evidence	DDE superfamily endonuclease  [55/55 hits are TIR; commonest type Mariner/Tc1 x55]
+Class_II/DNA/TIR/Tc1_Mariner:Tc1_Mariner-HTH_48	HTH_48	PF17906.8	TIR	Tc1_Mariner	Tc1_Mariner	HTH_48	13	OK-evidence	HTH domain in Mos1 transposase  [13/13 hits are TIR; commonest type Mariner/Tc1 x13]
+Class_II/DNA/TIR/Tc1_Mariner:Tc1_Mariner-HTH_Tnp_Tc3_2	HTH_Tnp_Tc3_2	PF01498.25	TIR	Tc1_Mariner	Tc1_Mariner	HTH_Tnp_Tc3_2	6	OK-evidence	Transposase  [6/6 hits are TIR; commonest type Mariner/Tc1 x6]
+Class_II/DNA/TIR/Tc1_Mariner:Tc1_Mariner-HTH_Tnp_Tc5	HTH_Tnp_Tc5	PF03221.23	TIR	Tc1_Mariner	Tc1_Mariner	HTH_Tnp_Tc5	26	OK-evidence	Tc5 transposase DNA-binding domain  [26/26 hits are TIR; commonest type Mariner/Tc1 x26]
+Class_II/DNA/TIR/Tc1_Mariner:Tc1_Mariner-Transposase_1	Transposase_1	PF01359.25	TIR	Tc1_Mariner	Tc1_Mariner	Transposase_1	5	OK-evidence	Transposase (partial DDE domain)  [5/5 hits are TIR; commonest type Mariner/Tc1 x5]
+Class_II/DNA/TIR/Tc1_mariner:Tc1_mariner-HTH_Tnp_Tc3_1	HTH_Tnp_Tc3_1	PF11427.15	TIR	Tc1_mariner	Tc1_mariner	HTH_Tnp_Tc3_1	1	OK	Tc3 transposase
+Class_II/DNA/TIR/Tc1_mariner:Tc1_mariner-HTH_Tnp_Tc3_2_like	HTH_Tnp_Tc3_2_like	PF21517.4	TIR	Tc1_mariner	Tc1_mariner	HTH_Tnp_Tc3_2_like	1	OK	Transposable element Tc3 transposase, HTH
+Class_II/DNA/TIR/Tc1_mariner:Tc1_mariner-TC1	TC1	PF15063.12	TIR	Tc1_mariner	Tc1_mariner	TC1	0	OK	Thyroid cancer protein 1
+Class_II/DNA/TIR/Tc1_mariner:Tc1_mariner-Transp_Tc5_C	Transp_Tc5_C	PF04236.21	TIR	Tc1_mariner	Tc1_mariner	Transp_Tc5_C	1	OK	Tc5 transposase C-terminal domain
+Class_II/DNA/TIR/Zisupton:Zisupton-CxC1	CxC1	PF18802.7	TIR	Zisupton	Zisupton	CxC1	24	OK	CxC1 like cysteine cluster associated with KDZ transposases
+Class_II/DNA/TIR/Zisupton:Zisupton-CxC2	CxC2	PF18803.7	TIR	Zisupton	Zisupton	CxC2	49	OK	CxC2 like cysteine cluster associated with KDZ transposases
+Class_II/DNA/TIR/Zisupton:Zisupton-CxC3	CxC3	PF18804.7	TIR	Zisupton	Zisupton	CxC3	2	OK	CxC3 like cysteine cluster associated with KDZ transposases
+Class_II/DNA/TIR/Zisupton:Zisupton-CxC4	CxC4	PF18717.7	TIR	Zisupton	Zisupton	CxC4	23	OK	CxC4 like cysteine cluster associated with KDZ transposases
+Class_II/DNA/TIR/Zisupton:Zisupton-CxC5	CxC5	PF18718.7	TIR	Zisupton	Zisupton	CxC5	14	OK	CxC5 like cysteine cluster associated with KDZ transposases
+Class_II/DNA/TIR/Zisupton:Zisupton-CxC6	CxC6	PF18721.7	TIR	Zisupton	Zisupton	CxC6	13	OK	CxC6 like cysteine cluster associated with KDZ transposases
+Class_II/DNA/TIR/Zisupton:Zisupton-CxC7	CxC7	PF18866.7	TIR	Zisupton	Zisupton	CxC7	6	OK	CxC7 like cysteine cluster associated with KDZ transposases
+Class_II/DNA/TIR/Zisupton:Zisupton-KDZ	KDZ	PF18758.8	TIR	Zisupton	Zisupton	KDZ	61	OK	Kyakuja-Dileera-Zisupton transposase
+Class_II/DNA/TIR/hAT:hAT-DIMER	Dimer_Tnp_hAT	PF05699.20	TIR	hAT	hAT	DIMER	66	OK-evidence	hAT family C-terminal dimerisation region  [66/66 hits are TIR; commonest type hAT x66]
+Class_II/DNA/TIR/hAT:hAT-HAT	HAT	PF02184.23	TIR	hAT	hAT	HAT	0	OK	HAT (Half-A-TPR) repeat
+Class_II/DNA/TIR/hAT:hAT-HAT_PRP39_C	HAT_PRP39_C	PF23241.2	TIR	hAT	hAT	HAT_PRP39_C	0	OK	PRP39 C-terminal HAT repeat
+Class_II/DNA/TIR/hAT:hAT-HAT_PRP39_N	HAT_PRP39_N	PF23240.2	TIR	hAT	hAT	HAT_PRP39_N	1	OK	PRP39 N-terminal HAT repeat
+Class_II/DNA/TIR/hAT:hAT-HAT_Syf1_CNRKL1_C	HAT_Syf1_CNRKL1_C	PF23231.2	TIR	hAT	hAT	HAT_Syf1_CNRKL1_C	0	OK	Pre-mRNA-splicing factor Syf1/CRNKL1 C-terminal HAT repeat
+Class_II/DNA/TIR/hAT:hAT-HAT_Syf1_CNRKL1_N	HAT_Syf1_CNRKL1_N	PF23233.2	TIR	hAT	hAT	HAT_Syf1_CNRKL1_N	1	OK	Pre-mRNA-splicing factor Syf1/CNRKL1 N-terminal HAT repeat
+Class_II/DNA/TIR/hAT:hAT-HAT_Syf1_M	HAT_Syf1_M	PF23220.2	TIR	hAT	hAT	HAT_Syf1_M	0	OK	Pre-mRNA-splicing factor SYF1 middle HAT repeat
+Class_II/DNA/TIR/hAT:hAT-hAT_like_RNase_H	hAT-like_RNase-H	PF14372.12	TIR	hAT	hAT	hAT_like_RNase_H	0	OK	hAT-like transposase, RNase-H fold
+Class_II/DNA/TIR/unknown:TIR-DBD_Tnp_Hermes	DBD_Tnp_Hermes	PF10683.15	TIR	unknown	TIR	DBD_Tnp_Hermes	0	REVIEW	Hermes transposase DNA-binding domain
+Class_II/DNA/TIR/unknown:TIR-DBD_Tnp_Mut	DBD_Tnp_Mut	PF03108.21	TIR	unknown	TIR	DBD_Tnp_Mut	4	REVIEW	MuDR family transposase
+Class_II/DNA/TIR/unknown:TIR-DDE_2	DDE_2	PF02914.22	TIR	unknown	TIR	DDE_2	0	REVIEW	Bacteriophage Mu transposase
+Class_II/DNA/TIR/unknown:TIR-DDE_5	DDE_5	PF13546.13	TIR	unknown	TIR	DDE_5	0	REVIEW	DDE superfamily endonuclease
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_1	DDE_Tnp_1	PF01609.28	TIR	unknown	TIR	DDE_Tnp_1	1	REVIEW	Transposase DDE domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_1_2	DDE_Tnp_1_2	PF13586.13	TIR	unknown	TIR	DDE_Tnp_1_2	0	REVIEW	Transposase DDE domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_1_3	DDE_Tnp_1_3	PF13612.13	TIR	unknown	TIR	DDE_Tnp_1_3	0	REVIEW	Transposase DDE domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_1_4	DDE_Tnp_1_4	PF13701.13	TIR	unknown	TIR	DDE_Tnp_1_4	0	REVIEW	Transposase DDE domain group 1
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_1_5	DDE_Tnp_1_5	PF13737.13	TIR	unknown	TIR	DDE_Tnp_1_5	0	REVIEW	Transposase DDE domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_1_6	DDE_Tnp_1_6	PF13751.13	TIR	unknown	TIR	DDE_Tnp_1_6	0	REVIEW	Transposase DDE domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_2	DDE_Tnp_2	PF04693.18	TIR	unknown	TIR	DDE_Tnp_2	0	REVIEW	Archaeal putative transposase ISC1217
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_4	DDE_Tnp_4	PF13359.13	TIR	unknown	TIR	DDE_Tnp_4	3	REVIEW	DDE superfamily endonuclease
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_IS1595	DDE_Tnp_IS1595	PF12762.14	TIR	unknown	TIR	DDE_Tnp_IS1595	0	REVIEW	ISXO2-like transposase domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_IS240	DDE_Tnp_IS240	PF13610.13	TIR	unknown	TIR	DDE_Tnp_IS240	0	REVIEW	DDE domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_ISAZ013	DDE_Tnp_ISAZ013	PF07592.18	TIR	unknown	TIR	DDE_Tnp_ISAZ013	0	REVIEW	Rhodopirellula transposase DDE domain
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_ISL3	DDE_Tnp_ISL3	PF01610.24	TIR	unknown	TIR	DDE_Tnp_ISL3	0	REVIEW	Transposase
+Class_II/DNA/TIR/unknown:TIR-DDE_Tnp_Tn3	DDE_Tnp_Tn3	PF01526.24	TIR	unknown	TIR	DDE_Tnp_Tn3	0	REVIEW	Tn3 transposase DDE domain
+Class_II/DNA/TIR/unknown:TIR-DEDD_Tnp_IS110	DEDD_Tnp_IS110	PF01548.24	TIR	unknown	TIR	DEDD_Tnp_IS110	0	REVIEW	Transposase
+Class_II/DNA/TIR/unknown:TIR-DIMER	Dimer_Tnp_Tn5	PF02281.22	TIR	unknown	TIR	DIMER	0	REVIEW	Transposase Tn5 dimerisation domain
+Class_II/DNA/TIR/unknown:TIR-DUF772	DUF772	PF05598.17	TIR	unknown	TIR	DUF772	0	REVIEW	Transposase domain (DUF772)
+Class_II/DNA/TIR/unknown:TIR-HTH_SB	HTH_SB	PF25787.2	TIR	unknown	TIR	HTH_SB	4	REVIEW	Sleeping Beauty transposase HTH domain
+Class_II/DNA/TIR/unknown:TIR-HTH_Tnp_1	HTH_Tnp_1	PF01527.27	TIR	unknown	TIR	HTH_Tnp_1	0	REVIEW	Transposase
+Class_II/DNA/TIR/unknown:TIR-HTH_Tnp_1_2	HTH_Tnp_1_2	PF13022.13	TIR	unknown	TIR	HTH_Tnp_1_2	0	REVIEW	Helix-turn-helix of insertion element transposase
+Class_II/DNA/TIR/unknown:TIR-HTH_Tnp_4	HTH_Tnp_4	PF13613.13	TIR	unknown	TIR	HTH_Tnp_4	1	REVIEW	Helix-turn-helix of DDE superfamily endonuclease
+Class_II/DNA/TIR/unknown:TIR-HTH_Tnp_IS630	HTH_Tnp_IS630	PF01710.23	TIR	unknown	TIR	HTH_Tnp_IS630	0	REVIEW	Transposase
+Class_II/DNA/TIR/unknown:TIR-HTH_Tnp_ISL3	HTH_Tnp_ISL3	PF13542.13	TIR	unknown	TIR	HTH_Tnp_ISL3	1	REVIEW	Helix-turn-helix domain of transposase family ISL3
+Class_II/DNA/TIR/unknown:TIR-Mu_transpos_C	Mu-transpos_C	PF09299.18	TIR	unknown	TIR	Mu_transpos_C	0	REVIEW	Mu transposase, C-terminal
+Class_II/DNA/TIR/unknown:TIR-Mu_transpos_C_2	Mu-transpos_C_2	PF22483.3	TIR	unknown	TIR	Mu_transpos_C_2	0	REVIEW	Mu transposase, C-terminal domain
+Class_II/DNA/TIR/unknown:TIR-Nterm_IS4	Nterm_IS4	PF13006.13	TIR	unknown	TIR	Nterm_IS4	0	REVIEW	Insertion element 4 transposase N-terminal
+Class_II/DNA/TIR/unknown:TIR-OrfB_IS605	OrfB_IS605	PF01385.26	TIR	unknown	TIR	OrfB_IS605	0	REVIEW	Probable transposase
+Class_II/DNA/TIR/unknown:TIR-PDDEXK_2	PDDEXK_2	PF12784.14	TIR	unknown	TIR	PDDEXK_2	0	REVIEW	PD-(D/E)XK nuclease family transposase
+Class_II/DNA/TIR/unknown:TIR-THAP9_C	THAP9_C	PF22824.2	TIR	unknown	TIR	THAP9_C	3	REVIEW	DNA transposase THAP9, C-terminal domain
+Class_II/DNA/TIR/unknown:TIR-Tnp_DNA_bind	Tnp_DNA_bind	PF14706.12	TIR	unknown	TIR	Tnp_DNA_bind	0	REVIEW	Transposase DNA-binding
+Class_II/DNA/TIR/unknown:TIR-Tnp_P_element	Tnp_P_element	PF12017.14	TIR	unknown	TIR	Tnp_P_element	1	REVIEW	Transposable element P transposase-like, HTH domain
+Class_II/DNA/TIR/unknown:TIR-Tnp_P_element_C	Tnp_P_element_C	PF12596.14	TIR	unknown	TIR	Tnp_P_element_C	1	REVIEW	87kDa Transposase
+Class_II/DNA/TIR/unknown:TIR-Transposase_21	Transposase_21	PF02992.21	TIR	unknown	TIR	Transposase_21	0	REVIEW	Transposase family tnp2
+Class_II/DNA/TIR/unknown:TIR-Transposase_28	Transposase_28	PF04195.18	TIR	unknown	TIR	Transposase_28	4	REVIEW	Putative gypsy type transposon
+Class_II/DNA/TIR/unknown:TIR-Transposase_29	Transposase_29	PF21804.4	TIR	unknown	TIR	Transposase_29	0	REVIEW	Transposase protein
+Class_II/DNA/TIR/unknown:TIR-Transposase_31	Transposase_31	PF04754.19	TIR	unknown	TIR	Transposase_31	0	REVIEW	Putative transposase, YhgA-like
+Class_II/DNA/TIR/unknown:TIR-Transposase_32	Transposase_32	PF20167.4	TIR	unknown	TIR	Transposase_32	0	REVIEW	Putative plant transposon protein
+Class_II/DNA/TIR/unknown:TIR-Y2_Tnp	Y2_Tnp	PF04986.19	TIR	unknown	TIR	Y2_Tnp	0	REVIEW	Putative transposase
+Class_II/DNA/TIR/unknown:TIR-Zn_Tnp_IS91	Zn_Tnp_IS91	PF14319.12	TIR	unknown	TIR	Zn_Tnp_IS91	0	REVIEW	Transposase zinc-binding domain
+Class_II/DNA/TIR/unknown:TIR-Zn_ribbon_IS1595	Zn_ribbon_IS1595	PF12760.13	TIR	unknown	TIR	Zn_ribbon_IS1595	2	REVIEW	Transposase zinc-ribbon domain

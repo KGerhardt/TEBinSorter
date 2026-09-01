@@ -81,6 +81,19 @@ SINE_CONFIG = {
     "clade_restrict": None,
 }
 
+# Pfam-derived TE domains. The model names are written in the REXdb convention
+# by build_pfam_te_db.py, so the REXdb parser reads them unchanged. No
+# `structures`: Pfam families are single domains and the add-on makes no claim
+# about domain architecture, so completeness is never asserted from it.
+PFAMTE_CONFIG = {
+    "name": "pfam-te",
+    "domain_remap": {},
+    "overlap_aware": False,
+    "structures": {},
+    "clade_parser": "rexdb",
+    "clade_restrict": None,
+}
+
 DB_CONFIGS = {
     "rexdb": REXDB_CONFIG,
     "gydb": GYDB_CONFIG,
@@ -89,6 +102,7 @@ DB_CONFIGS = {
     "sine": SINE_CONFIG,
     "sine-animals": SINE_CONFIG,
     "sine-so": SINE_CONFIG,
+    "pfam-te": PFAMTE_CONFIG,
 }
 
 # GyDB clade map: loaded from GyDB2.hmm.info (ships alongside GyDB2.hmm)

@@ -50,7 +50,19 @@ DB_ALIASES = {
     # drop it. On by default, like every alias except sine-so.
     "sine-animals": "AnnoSINE_animals.hmm",
     "sine-so":  "SINE_SO.hmm",
+    # Pfam-derived TE domains, for families the curated databases do not model:
+    # L1 ORF1p/ORF2p flanking domains, DNA-transposon DNA-binding and
+    # dimerisation domains, Zisupton/Academ/Dada transposases, the
+    # Helitron/Academ helicases. Model names are rewritten into the REXdb
+    # convention (see database/PfamTE.manifest.tsv for the Pfam mapping), so no
+    # new parser is needed. NOT on by default: Pfam families are defined across
+    # a whole fold rather than a TE superfamily, so breadth has to be priced
+    # before it can be trusted in a default run.
+    "pfam-te":  "PfamTE.hmm",
 }
+
+# Aliases that exist but are not searched unless named with -d.
+NON_DEFAULT_DBS = ("sine-so", "pfam-te")
 
 
 def resolve_db(name, db_dir=None):
@@ -236,7 +248,7 @@ def main():
     # classifies independently and reconciliation resolves them afterwards, so
     # more databases is more evidence rather than more ambiguity.
     if args.max_search or not args.database:
-        db_names = [k for k in DB_ALIASES.keys() if k != "sine-so"]
+        db_names = [k for k in DB_ALIASES.keys() if k not in NON_DEFAULT_DBS]
         if args.include_sine_so:
             db_names.append("sine-so")
     else:

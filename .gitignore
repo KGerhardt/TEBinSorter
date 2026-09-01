@@ -51,3 +51,7 @@ _regression/*
 dist/
 build/
 *.egg-info/
+
+# Database manifests ship with the package (pyproject packages database/*),
+# so they are exempt from the blanket *.tsv rule above.
+!tesorter2/database/*.tsv
