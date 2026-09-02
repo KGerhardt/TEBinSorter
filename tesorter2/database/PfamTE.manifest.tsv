@@ -9,9 +9,9 @@ Class_I/LTR/Retroviridae/Retroviridae:Retroviridae-INT	IN_DBD_C	PF00552.28	LTR	R
 Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-Gag_p24	Gag_p24	PF00607.26	LTR	Retrovirus	Retrovirus	Gag_p24	4	REVIEW	gag protein p24 N-terminal domain
 Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-Gag_p24_C	Gag_p24_C	PF19317.5	LTR	Retrovirus	Retrovirus	Gag_p24_C	0	REVIEW	Gag protein p24 C-terminal domain
 Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-INT	gag_pre-integrs	PF13976.12	LTR	Retrovirus	Retrovirus	INT	1	REVIEW	GAG-pre-integrase domain
-Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-Retrotran_gag_2	Retrotran_gag_2	PF14223.14	LTR	Retrovirus	Retrovirus	Retrotran_gag_2	0	REVIEW	gag-polypeptide of LTR copia-type
+Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-Retrotran_gag_2	Retrotran_gag_2	PF14223.15	LTR	Retrovirus	Retrovirus	Retrotran_gag_2	0	REVIEW	gag-polypeptide of LTR copia-type
 Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-Retrotran_gag_3	Retrotran_gag_3	PF14244.13	LTR	Retrovirus	Retrovirus	Retrotran_gag_3	0	REVIEW	gag-polypeptide of LTR copia-type
-Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-Retrotrans_gag	Retrotrans_gag	PF03732.24	LTR	Retrovirus	Retrovirus	Retrotrans_gag	0	REVIEW	Retrotransposon gag protein
+Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-Retrotrans_gag	PEG10_N-capsid	PF03732.25	LTR	Retrovirus	Retrovirus	Retrotrans_gag	0	REVIEW	Retrotransposon gag protein
 Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-gag_asp_proteas	gag-asp_proteas	PF13975.12	LTR	Retrovirus	Retrovirus	gag_asp_proteas	0	REVIEW	gag-polyprotein putative aspartyl protease
 Class_I/LTR/Retrovirus/Retrovirus:Retrovirus-zf_CCHC_5	zf-CCHC_5	PF14787.12	LTR	Retrovirus	Retrovirus	zf_CCHC_5	3	REVIEW	GAG-polyprotein viral zinc-finger
 Class_I/LTR/unknown/LTR:LTR-Integrase_H2C2	Integrase_H2C2	PF17921.8	LTR	unknown	LTR	Integrase_H2C2	0	REVIEW	Integrase zinc binding domain
@@ -43,8 +43,8 @@ Class_II/DNA/TIR/Tc1_mariner/Tc1_mariner:Tc1_mariner-HTH_Tnp_Tc3_1	HTH_Tnp_Tc3_1
 Class_II/DNA/TIR/Tc1_mariner/Tc1_mariner:Tc1_mariner-HTH_Tnp_Tc3_2_like	HTH_Tnp_Tc3_2_like	PF21517.4	TIR	Tc1_mariner	Tc1_mariner	HTH_Tnp_Tc3_2_like	1	OK	Transposable element Tc3 transposase, HTH
 Class_II/DNA/TIR/Tc1_mariner/Tc1_mariner:Tc1_mariner-Transp_Tc5_C	Transp_Tc5_C	PF04236.21	TIR	Tc1_mariner	Tc1_mariner	Transp_Tc5_C	1	OK	Tc5 transposase C-terminal domain
 Class_II/DNA/TIR/hAT/hAT:hAT-DIMER	Dimer_Tnp_hAT	PF05699.20	TIR	hAT	hAT	DIMER	66	OK-evidence	hAT family C-terminal dimerisation region  [66/66 hits are TIR; commonest type hAT x66]
-Class_II/DNA/TIR/hAT/hAT:hAT-hAT_like_RNase_H	hAT-like_RNase-H	PF14372.12	TIR	hAT	hAT	hAT_like_RNase_H	0	OK	hAT-like transposase, RNase-H fold
-Class_II/DNA/TIR/unknown/TIR:TIR-DBD_Tnp_Hermes	DBD_Tnp_Hermes	PF10683.15	TIR	unknown	TIR	DBD_Tnp_Hermes	0	REVIEW	Hermes transposase DNA-binding domain
+Class_II/DNA/TIR/hAT/hAT:hAT-hAT_like_RNase_H	hAT-like_RNase-H	PF14372.13	TIR	hAT	hAT	hAT_like_RNase_H	0	OK	hAT-like transposase, RNase-H fold
+Class_II/DNA/TIR/unknown/TIR:TIR-DBD_Tnp_Hermes	DBD_Tnp_Hermes	PF10683.16	TIR	unknown	TIR	DBD_Tnp_Hermes	0	REVIEW	Hermes transposase DNA-binding domain
 Class_II/DNA/TIR/unknown/TIR:TIR-DBD_Tnp_Mut	DBD_Tnp_Mut	PF03108.21	TIR	unknown	TIR	DBD_Tnp_Mut	4	REVIEW	MuDR family transposase
 Class_II/DNA/TIR/unknown/TIR:TIR-DDE_Tnp_IS1595	DDE_Tnp_IS1595	PF12762.14	TIR	unknown	TIR	DDE_Tnp_IS1595	0	REVIEW	ISXO2-like transposase domain
 Class_II/DNA/TIR/unknown/TIR:TIR-HTH_SB	HTH_SB	PF25787.2	TIR	unknown	TIR	HTH_SB	4	REVIEW	Sleeping Beauty transposase HTH domain
