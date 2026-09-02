@@ -54,11 +54,11 @@ DB_ALIASES = {
     # L1 ORF1p/ORF2p flanking domains, DNA-transposon DNA-binding and
     # dimerisation domains, Zisupton/Academ/Dada transposases, the
     # Helitron/Academ helicases. Model names are rewritten into the REXdb
-    # convention (see database/PfamTE.manifest.tsv for the Pfam mapping), so no
+    # convention (see database/kenjis_pfam_TE.manifest.tsv for the Pfam mapping), so no
     # new parser is needed. NOT on by default: Pfam families are defined across
     # a whole fold rather than a TE superfamily, so breadth has to be priced
     # before it can be trusted in a default run.
-    "pfam-te":  "PfamTE.hmm",
+    "pfam-te":  "kenjis_pfam_TE.hmm",
 }
 
 # Aliases that exist but are not searched unless named with -d.
